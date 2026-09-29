@@ -1,0 +1,3 @@
+set_code,card_number,grade_company,grade,price_nok,source,confidence
+TEF,177/162,PSA,9,1100,manual-ebay-sold,0.6
+TEF,177/162,PSA,10,5300,manual-ebay-sold,0.6

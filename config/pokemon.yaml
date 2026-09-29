@@ -1,0 +1,61 @@
+# Pokémon preferences. Names are matched case-insensitively against the card's
+# Pokémon name (e.g. "Gastly" also matches "Gastly ex" but not "Haunter").
+#
+# popularity tiers feed the `pokemon_popularity` score component (0..1).
+popularity_tiers:
+  iconic:          # 1.0 — the absolute blue chips
+    score: 1.0
+    names: [Charizard, Pikachu, Umbreon, Mew, Mewtwo, Rayquaza, Lugia, Gengar, Eevee]
+  high:            # 0.85
+    score: 0.85
+    names: [Sylveon, Espeon, Vaporeon, Jolteon, Flareon, Leafeon, Glaceon, Gastly, Haunter,
+            Greninja, Tyranitar, Dragonite, Snorlax, Blastoise, Venusaur, Gardevoir, Giratina,
+            Lucario, Garchomp, Raichu, Morpeko, Squirtle, Charmander, Bulbasaur, Ho-Oh, Celebi]
+  medium:          # 0.6
+    score: 0.6
+    names: [Arcanine, Alakazam, Gyarados, Lapras, Ditto, Psyduck, Slowpoke, Pachirisu,
+            Mimikyu, Rowlet, Piplup, Sprigatito, Fuecoco, Quaxly, Iono, Lillie, Cynthia]
+# Popularity for Pokémon not in any tier.
+default_score: 0.3
+
+# High-priority Pokémon: bonus when missing from the portfolio, and eligible for
+# GOOD alerts. Edit freely.
+high_priority:
+  - Charizard
+  - Pikachu
+  - Eevee
+  - Umbreon
+  - Sylveon
+  - Espeon
+  - Vaporeon
+  - Jolteon
+  - Flareon
+  - Leafeon
+  - Glaceon
+  - Gengar
+  - Gastly
+  - Haunter
+  - Mew
+  - Mewtwo
+  - Lugia
+  - Rayquaza
+  - Greninja
+  - Tyranitar
+  - Dragonite
+
+# Listings for these Pokémon are never alerted (still recorded for pricing).
+ignored: []
+
+# Themes you collect; owning others from a theme increases the "completes theme" bonus.
+themes:
+  eeveelutions: [Eevee, Vaporeon, Jolteon, Flareon, Espeon, Umbreon, Leafeon, Glaceon, Sylveon]
+  gengar_line: [Gastly, Haunter, Gengar]
+  kanto_starters: [Bulbasaur, Ivysaur, Venusaur, Charmander, Charmeleon, Charizard, Squirtle, Wartortle, Blastoise]
+
+# Specific premium targets (your GOD-binder wishlist). Matched by name substring,
+# optional set substring and optional card number. These are preferences, not
+# investment advice.
+premium_targets:
+  - {name: "Charizard", set_contains: "30th Celebration", number: "4"}
+  - {name: "Sylveon ex", set_contains: "30th Celebration"}
+  - {name: "Morpeko ex", set_contains: "Pitch Black", rarity_contains: "Special Illustration"}

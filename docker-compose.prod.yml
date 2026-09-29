@@ -1,0 +1,40 @@
+# Production overrides for the Proxmox VM:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+services:
+  postgres:
+    logging: *logging
+    # Nothing outside the compose network ever needs the DB.
+  migrate:
+    logging: *logging
+  api:
+    logging: *logging
+    # API only needs to be reachable by the web container in production.
+    ports: !reset []
+  worker:
+    logging: *logging
+  web:
+    logging: *logging
+
+  # Daily pg_dump with 7 daily + 4 weekly retention, written to ./backups on the host.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-dealhunter}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-dealhunter}
+      BACKUP_DIR: /backups
+      BACKUP_HOUR: "02"
+      TZ: Europe/Oslo
+    volumes:
+      - ./backups:/backups
+      - ./infra/backup:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
+    logging: *logging
+    depends_on:
+      postgres: { condition: service_healthy }

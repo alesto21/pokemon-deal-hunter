@@ -1,0 +1,66 @@
+# Local set metadata. `desirability` (0..1) feeds the set_desirability score.
+# `aliases` help the matcher recognise sets in free-text titles (FINN, stores).
+# `cardtrader_track: true` means the CardTrader collector scans the whole set.
+# pack counts are per product type and used for sealed normalisation.
+# pull-rate/EV data is intentionally NOT included: we do not claim EV without real data.
+default_desirability: 0.5
+sets:
+  - name: "Temporal Forces"
+    code: "TEF"
+    aliases: ["temporal forces", "tef", "sv5"]
+    release_date: 2024-03-22
+    printed_total: 162
+    desirability: 0.6
+    cardtrader_track: true
+  - name: "Paldea Evolved"
+    code: "PAL"
+    aliases: ["paldea evolved", "pal", "sv2"]
+    release_date: 2023-06-09
+    printed_total: 193
+    desirability: 0.7
+    cardtrader_track: true
+  - name: "Twilight Masquerade"
+    code: "TWM"
+    aliases: ["twilight masquerade", "twm", "sv6"]
+    release_date: 2024-05-24
+    printed_total: 167
+    desirability: 0.65
+    cardtrader_track: true
+  - name: "151"
+    code: "MEW"
+    aliases: ["151", "pokemon 151", "pokémon 151", "scarlet & violet 151", "mew", "sv3.5"]
+    release_date: 2023-09-22
+    printed_total: 165
+    desirability: 0.95
+    cardtrader_track: true
+  - name: "Paradox Rift"
+    code: "PAR"
+    aliases: ["paradox rift", "par", "sv4"]
+    release_date: 2023-11-03
+    printed_total: 182
+    desirability: 0.6
+    cardtrader_track: true
+  - name: "Prismatic Evolutions"
+    code: "PRE"
+    aliases: ["prismatic evolutions", "prismatic", "pre", "sv8.5"]
+    release_date: 2025-01-17
+    printed_total: 131
+    desirability: 0.95
+    cardtrader_track: false
+  - name: "Evolving Skies"
+    code: "EVS"
+    aliases: ["evolving skies", "evs", "swsh7"]
+    release_date: 2021-08-27
+    printed_total: 203
+    desirability: 1.0
+    cardtrader_track: false
+
+# Default pack counts per sealed product type (override per product in the DB).
+pack_counts:
+  booster_pack: 1
+  booster_bundle: 6
+  booster_box: 36
+  etb: 9
+  upc: 16
+  collection_box: 4
+  tin: 3

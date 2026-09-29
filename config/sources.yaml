@@ -1,0 +1,46 @@
+# Source configuration and schedules (minutes). Secrets live in .env, never here.
+cardtrader:
+  enabled: true
+  interval_minutes: 30
+  requests_per_second: 2          # API allows 10/s on marketplace; stay well below
+  languages: [en]
+  accepted_conditions: ["Mint", "Near Mint"]
+  exclude_graded: true
+  estimated_shipping_nok: 60      # added to CardTrader listing totals
+  track_sets_from_config: true    # sets with cardtrader_track: true in sets.yaml
+  extra_expansion_codes: []       # additional CardTrader expansion codes to scan
+  evaluate_cheapest_n: 3          # evaluate the N cheapest listings per item as deals
+  min_fair_value_to_evaluate_nok: 100  # skip deal evaluation for bulk (still priced) unless watchlisted
+
+finn:
+  enabled: true
+  # When a URL is added manually, fetch the page ONCE if robots.txt allows it and
+  # read only its public metadata. Never crawls, never searches, never logs in.
+  fetch_metadata: true
+  estimated_shipping_nok: 0
+
+stores:
+  enabled: false
+  interval_minutes: 60
+  requests_per_second: 0.5
+  # Generic Shopify-based store adapter (public /products.json). Add stores you
+  # have checked allow it in robots.txt / terms. Example (disabled):
+  shops:
+    - name: example_store
+      enabled: false
+      kind: shopify
+      base_url: "https://example-tcg-store.no"
+      collection: "pokemon"
+      currency: NOK
+      estimated_shipping_nok: 79
+
+scheduler:
+  fx_refresh_hour: 6
+  maintenance_hour: 3
+  portfolio_snapshot_hour: 4
+
+retention:
+  raw_snapshot_days: 30
+  collector_run_days: 30
+  listing_gone_after_days: 14
+  evaluation_days: 90             # deal evaluations without alerts are pruned after this

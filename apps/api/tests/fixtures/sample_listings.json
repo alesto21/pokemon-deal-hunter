@@ -1,0 +1,51 @@
+{
+  "_comment": "Scenario fixtures for the scoring engine. Prices in NOK. history.trend_30d is relative.",
+  "obvious_steal": {
+    "source": "finn", "title": "Gastly 177/162 Temporal Forces SIR NM", "total_price_nok": 520,
+    "entity_type": "card", "entity_name": "Gastly", "pokemon_name": "Gastly", "rarity": "Special Illustration Rare",
+    "set_code": "TEF", "set_name": "Temporal Forces", "card_number": "177/162",
+    "fair_value": 910, "fv_confidence": 0.95, "listing_count": 22,
+    "history": {"median_30d": 925, "days_30d": 30, "trend_30d": 0.06},
+    "psa9_nok": 1500, "psa10_nok": 5300, "portfolio": {"is_high_priority": true, "is_iconic": false}
+  },
+  "fair_price": {
+    "source": "cardtrader", "title": "Raichu 211/193", "total_price_nok": 205,
+    "entity_type": "card", "entity_name": "Raichu", "pokemon_name": "Raichu", "rarity": "Illustration Rare",
+    "set_code": "PAL", "set_name": "Paldea Evolved", "card_number": "211/193",
+    "fair_value": 200, "fv_confidence": 0.9, "listing_count": 16, "history": {"trend_30d": 0.0, "days_30d": 30}
+  },
+  "overpriced": {
+    "source": "finn", "title": "Charizard ex 199/165 151", "total_price_nok": 1900,
+    "entity_type": "card", "entity_name": "Charizard ex", "pokemon_name": "Charizard",
+    "rarity": "Special Illustration Rare", "set_code": "MEW", "set_name": "151", "card_number": "199/165",
+    "fair_value": 1450, "fv_confidence": 0.9, "listing_count": 25, "history": {"trend_30d": 0.02, "days_30d": 30}
+  },
+  "cheap_worthless": {
+    "source": "cardtrader", "title": "Bidoof 150/193", "total_price_nok": 21,
+    "entity_type": "card", "entity_name": "Bidoof", "pokemon_name": "Bidoof", "rarity": "Common",
+    "set_code": "PAL", "set_name": "Paldea Evolved", "card_number": "150/193",
+    "fair_value": 30, "fv_confidence": 0.9, "listing_count": 60, "history": {"trend_30d": 0.0, "days_30d": 30}
+  },
+  "duplicate": {
+    "source": "cardtrader", "title": "Eevee 188/167", "total_price_nok": 360,
+    "entity_type": "card", "entity_name": "Eevee", "pokemon_name": "Eevee", "rarity": "Illustration Rare",
+    "set_code": "TWM", "set_name": "Twilight Masquerade", "card_number": "188/167",
+    "fair_value": 470, "fv_confidence": 0.9, "listing_count": 15, "history": {"trend_30d": 0.03, "days_30d": 30},
+    "portfolio": {"owned_quantity": 1, "owned_in_premium": true, "is_high_priority": true, "is_iconic": true,
+                  "owns_pokemon_in_binder": true}
+  },
+  "sealed_booster_box": {
+    "source": "finn", "title": "Paradox Rift Booster Box 36 packs", "total_price_nok": 1850,
+    "entity_type": "product", "entity_name": "Paradox Rift Booster Box", "product_type": "booster_box",
+    "set_code": "PAR", "set_name": "Paradox Rift", "pack_count": 36, "release_date": "2023-11-03",
+    "fair_value": 2150, "fv_confidence": 0.85, "listing_count": 8,
+    "loose_pack_value_nok": 58, "top_chase_value_nok": 1200, "history": {"trend_30d": 0.04, "days_30d": 30}
+  },
+  "low_confidence_match": {
+    "source": "finn", "title": "pokemon kort gastly fin", "total_price_nok": 400,
+    "entity_type": "card", "entity_name": "Gastly", "pokemon_name": "Gastly", "rarity": "Special Illustration Rare",
+    "set_code": "TEF", "set_name": "Temporal Forces", "card_number": "177/162",
+    "fair_value": 910, "fv_confidence": 0.9, "match_confidence": 0.62, "listing_count": 22,
+    "history": {"trend_30d": 0.0, "days_30d": 30}
+  }
+}

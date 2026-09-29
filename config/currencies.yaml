@@ -1,0 +1,6 @@
+base_currency: NOK
+display_currencies: [NOK, EUR, USD]
+# Free ECB-based rates, no API key. Refreshed at most daily and cached in the DB.
+fx_provider_url: "https://api.frankfurter.dev/v1/latest"
+# Used only if no cached rate exists yet (flagged in logs). Units: NOK per 1 unit.
+fallback_rates_nok: {NOK: 1.0, EUR: 11.7, USD: 10.2, GBP: 13.6, SEK: 1.0, DKK: 1.57}

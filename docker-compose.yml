@@ -1,0 +1,92 @@
+# Pokémon Deal Hunter — local / single-host deployment.
+#   docker compose up -d --build
+# Production overrides (backups, log rotation): add -f docker-compose.prod.yml
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dealhunter}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dealhunter}
+  API_KEY: ${API_KEY:-}
+  CARDTRADER_API_TOKEN: ${CARDTRADER_API_TOKEN:-}
+  CARDTRADER_MOCK: ${CARDTRADER_MOCK:-auto}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+  TELEGRAM_DRY_RUN: ${TELEGRAM_DRY_RUN:-auto}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  TZ: Europe/Oslo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dealhunter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dealhunter}
+      TZ: Europe/Oslo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies Alembic migrations, then exits. api/worker wait for it.
+  migrate:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    image: pokemon-deal-hunter-api:latest
+    environment: *app-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: pokemon-deal-hunter-api:latest
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - appdata:/data
+      - ./config:/srv/config:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    image: pokemon-deal-hunter-api:latest
+    restart: unless-stopped
+    environment: *app-env
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - appdata:/data
+      - ./config:/srv/config:ro
+    healthcheck:
+      # heartbeat file is touched every 60 s by the scheduler
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/worker-heartbeat 2>/dev/null || echo 0) )) -lt 180"]
+      interval: 60s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  web:
+    build: { context: apps/web }
+    image: pokemon-deal-hunter-web:latest
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      API_KEY: ${API_KEY:-}
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      TZ: Europe/Oslo
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  appdata:

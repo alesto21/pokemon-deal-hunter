@@ -1,0 +1,17 @@
+# Binder rules. A card "fits" the premium (GOD) binder when its fair value is at
+# least premium.min_raw_value_nok OR it is an explicit premium target.
+premium:
+  min_raw_value_nok: 400
+  preferred_max_buy_nok: 1500
+regular:
+  min_raw_value_nok: 50
+# Portfolio-aware score modifiers (points added to the 0..100 score).
+modifiers:
+  duplicate_in_premium: -8
+  duplicate_other: -4
+  duplicate_exceptional_discount: 0.35   # no duplicate penalty above this discount
+  missing_high_priority: 8
+  iconic_missing_from_binder: 5
+  completes_set_or_theme: 5
+  improves_diversification: 3
+  max_total_bonus: 15

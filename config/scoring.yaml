@@ -1,0 +1,49 @@
+# Component weights (should sum to 100).
+weights:
+  discount_to_fair_value: 30
+  liquidity: 20
+  pokemon_popularity: 15
+  set_desirability: 10
+  trend: 10
+  grading_upside: 10
+  scarcity: 5
+
+# Discount → component score, piecewise linear [discount, score].
+discount_curve: [[0.0, 0.0], [0.10, 0.3], [0.15, 0.5], [0.22, 0.72], [0.30, 0.9], [0.40, 1.0]]
+# Listing count → liquidity, piecewise linear.
+liquidity_curve: [[0, 0.0], [1, 0.1], [3, 0.3], [8, 0.6], [15, 0.8], [30, 1.0]]
+# 30d trend → trend score. Falling prices are penalised (falling knife).
+trend_curve: [[-0.20, 0.0], [-0.05, 0.35], [0.0, 0.5], [0.10, 0.8], [0.25, 1.0]]
+unknown_trend_score: 0.4
+unknown_grading_score: 0.25
+
+# Recommendation bands (lower bound inclusive).
+bands:
+  STEAL: 93
+  STRONG_BUY: 85
+  GOOD: 75
+  WATCH: 60
+
+modifiers:
+  seller_confidence_max_penalty: 12     # points at seller confidence 0
+  seller_confidence_neutral: 0.8        # no penalty above this
+  match_confidence_penalty_per_0_1: 5   # points per 0.1 below 0.9 match confidence
+  lot_uncertainty_penalty: 8
+  multi_item_bundle_penalty: 3
+  watchlist_target_met_bonus: 8
+  watchlist_high_priority_bonus: 3
+  premium_value_bonus: 3               # fair value above premium binder minimum
+
+# Red-flag words in titles/descriptions (lower-case). Hit → seller confidence drops.
+red_flags: [proxy, replica, fake, custom, orica, "fan made", fanmade, reprint, "ikke original",
+            kopi, damaged, creased, bøyd, skadet, water damage, vannskade]
+
+# Fair value estimator parameters.
+fair_value:
+  min_listings_for_current: 3
+  current_blend: {trimmed_median: 0.6, cheapest5_median: 0.4}
+  history_weight: 0.4            # weight on own 30d median when available
+  min_history_days: 5
+  high_dispersion: 0.5           # (p75-p25)/median above this lowers confidence
+  high_volatility: 0.15          # stdev of daily log returns above this lowers confidence
+  trim_fraction: 0.2

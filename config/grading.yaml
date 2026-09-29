@@ -1,0 +1,5 @@
+estimated_grading_cost_nok: 450
+# grading_upside = (PSA10 - raw - cost) / raw  → component score, piecewise linear
+upside_curve: [[0.0, 0.0], [0.5, 0.4], [1.0, 0.7], [2.0, 1.0]]
+# Flag "PSA10-only economics" when PSA9 - raw - cost is below this fraction of raw.
+psa9_min_margin: 0.10

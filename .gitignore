@@ -1,0 +1,41 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.db
+*.sqlite
+
+# node
+node_modules/
+.next/
+out/
+
+# runtime data
+data/
+backups/
+pgdata/
+postgres-data/
+*.dump
+*.dump.partial
+*.sql
+*.sql.gz
+*.db-journal
+*.log
+.DS_Store
+
+# local screenshots / scratch
+screenshots/
+*.screenshot.png
+tmp/
+*.tmp
+
+# frontend build info
+*.tsbuildinfo

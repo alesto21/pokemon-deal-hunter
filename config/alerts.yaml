@@ -1,0 +1,23 @@
+# Notification policy. Scores never notify below GOOD.
+minimum_notification_fair_value_nok: 250
+minimum_discount_good: 0.15
+minimum_discount_strong_buy: 0.22
+minimum_discount_steal: 0.30
+min_match_confidence: 0.90
+min_fair_value_confidence: 0.5
+allow_damaged: false
+damaged_conditions: [damaged, poor, played, heavily played, moderately played]
+max_alerts_per_day: 5            # STEAL ignores the cap
+steal_ignores_daily_cap: true
+repeat_cooldown_hours: 24        # same listing: re-alert only after cooldown ...
+repeat_min_price_drop: 0.10      # ... AND at least this relative price drop
+# GOOD alerts only when at least one of these rules fires:
+good_rules:
+  watchlist_target_met: true
+  high_priority_missing: true
+  premium_binder_fit: true
+watch_digest:
+  enabled: false
+  hour: 19
+source_health:
+  failures_before_alert: 3

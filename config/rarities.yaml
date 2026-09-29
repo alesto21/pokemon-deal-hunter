@@ -1,0 +1,21 @@
+# Rarity → scarcity score (0..1). Keys are matched case-insensitively as substrings,
+# first match wins, so keep longer/more specific names first.
+scarcity:
+  - {match: "special illustration", score: 1.0}
+  - {match: "hyper rare", score: 0.9}
+  - {match: "gold", score: 0.9}
+  - {match: "illustration rare", score: 0.75}
+  - {match: "ultra rare", score: 0.6}
+  - {match: "secret", score: 0.8}
+  - {match: "shiny", score: 0.6}
+  - {match: "ace spec", score: 0.5}
+  - {match: "double rare", score: 0.35}
+  - {match: "promo", score: 0.4}
+  - {match: "holo", score: 0.3}
+  - {match: "rare", score: 0.25}
+  - {match: "uncommon", score: 0.05}
+  - {match: "common", score: 0.0}
+default_score: 0.2
+
+# Rarities that qualify a card for the premium binder by themselves.
+premium_rarities: ["special illustration", "hyper rare", "illustration rare"]
