@@ -3,6 +3,10 @@ minimum_notification_fair_value_nok: 250
 minimum_discount_good: 0.15
 minimum_discount_strong_buy: 0.22
 minimum_discount_steal: 0.30
+# Too good to be true: a price this far below fair value is more often a stale, mislabelled or
+# misdescribed listing than a real steal. It still alerts, but at most as STRONG_BUY (so it
+# counts toward the daily cap) and with a "verify before buying" warning.
+suspicious_discount: 0.45
 min_match_confidence: 0.90
 min_fair_value_confidence: 0.5
 allow_damaged: false

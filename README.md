@@ -42,7 +42,11 @@ docker compose exec api python -m app.cli add-graded 1 10 5300    # card 1, PSA 
 docker compose exec api python -m app.cli test-telegram
 docker compose exec api python -m app.cli backfill-prices
 docker compose exec api python -m app.cli source-health
-docker compose exec api python -m app.cli cardtrader-check --set-code TEF
+docker compose exec api python -m app.cli cardtrader-check --set-code TEF        # set overview with fair values
+docker compose exec api python -m app.cli cardtrader-debug-card --set-code TEF --card-number 177   # every listing, used or why not
+docker compose exec api python -m app.cli alert-preview      # read-only: what would alert on a fresh day
+docker compose exec api python -m app.cli purge-mock-data    # after switching from mock to live
+docker compose exec api python -m app.cli reset-price-history  # after a pricing-model change
 docker compose logs -f worker
 ```
 
@@ -109,13 +113,18 @@ Price history · Match review · Sources · Collector health · Settings.
 
 ## How alerts are decided (short version)
 
-1. Fair value = blend of the trimmed current median and the cheapest-5 median, blended with our own
-   30-day median. Confidence drops when data is thin, dispersed or volatile. **Never just the
-   cheapest listing.**
+1. Fair value = the **buyable** market: 60% cheapest-5 median + 25% cheapest-10 median + 15% own
+   30-day median, over valid listings only (English, NM, raw, not reverse holo, one per seller).
+   Stale expensive asks are ignored, and one cheap listing can't define it. Confidence drops when
+   data is thin, dispersed or volatile.
 2. Score = weighted components + modifiers, which gives IGNORE / WATCH / GOOD / STRONG BUY / STEAL.
-3. The alert severity is capped by the actual discount (15 / 22 / 30%).
-4. Hard filters: fair value ≥ 250 NOK, match confidence ≥ 0.9, sensible condition, no duplicates
-   without a > 35% discount, no re-alerts without a real price drop, max 5/day (STEAL exempt).
+3. The alert severity is capped by the actual discount (15 / 22 / 30%). A discount over 45% is
+   capped at STRONG BUY with a "verify listing" warning, because such listings are usually stale
+   or mispriced.
+4. Hard filters: fair value ≥ 250 NOK, match confidence ≥ 0.9, fair-value confidence ≥ 0.5,
+   sensible condition, no duplicates without a > 35% discount, no re-alert for the same listing
+   **or the same card** without a real price drop, max 5/day (STEAL exempt). Dry-run and live
+   alerts are counted separately.
 
 A 30% discount on a 30 NOK card never notifies you. See ARCHITECTURE.md for the details.
 

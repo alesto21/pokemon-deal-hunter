@@ -28,14 +28,16 @@ class HistoryStats:
 
 
 def record_snapshot(session: Session, entity_type: str, entity_id: int, source: str, stats: PriceStats,
-                    ts: datetime | None = None) -> PriceSnapshot | None:
+                    ts: datetime | None = None, excluded: int | None = None) -> PriceSnapshot | None:
     if stats.count == 0:
         return None
     snap = PriceSnapshot(
         entity_type=entity_type, entity_id=entity_id, source=source, timestamp=ts or utcnow(),
         low_price=stats.low, median_price=stats.median, trimmed_median=stats.trimmed_median,
-        cheapest5_median=stats.cheapest5_median, listing_count=stats.count,
-        seller_count=stats.seller_count, dispersion=stats.dispersion, currency="NOK",
+        cheapest5_median=stats.cheapest5_median, cheapest3_median=stats.cheapest3_median,
+        cheapest10_median=stats.cheapest10_median, listing_count=stats.count, excluded_count=excluded,
+        seller_count=stats.seller_count, dispersion=stats.dispersion,
+        has_expensive_tail=stats.has_expensive_tail, currency="NOK",
     )
     session.add(snap)
     return snap
@@ -82,6 +84,8 @@ def aggregate_day(session: Session, day: date, entities: set[tuple[str, int]] | 
         row.low_price = min((r.low_price for r in rows if r.low_price is not None), default=None)
         row.median_price = med("median_price")
         row.trimmed_median = med("trimmed_median")
+        row.cheapest5_median = med("cheapest5_median")
+        row.cheapest10_median = med("cheapest10_median")
         row.listing_count = med("listing_count")
         row.samples = len(rows)
         if not existing:
@@ -97,9 +101,14 @@ def daily_series(session: Session, entity_type: str, entity_id: int, days: int |
     return list(session.scalars(q.order_by(PriceDaily.day)).all())
 
 
+def daily_price(row: PriceDaily) -> float | None:
+    """The executable (cheapest-5) price of a day; broad median only as a legacy fallback."""
+    return row.cheapest5_median or row.median_price
+
+
 def _window_median(series: list[PriceDaily], days: int) -> tuple[float | None, int]:
     cutoff = date.today() - timedelta(days=days)
-    vals = [r.trimmed_median or r.median_price for r in series if r.day >= cutoff]
+    vals = [daily_price(r) for r in series if r.day >= cutoff]
     vals = [v for v in vals if v]
     return (round(statistics.median(vals), 2) if vals else None), len(vals)
 
@@ -112,11 +121,11 @@ def compute_history_stats(series: list[PriceDaily]) -> HistoryStats:
     h.median_7d, _ = _window_median(series, 7)
     h.median_30d, h.days_30d = _window_median(series, 30)
     h.median_90d, _ = _window_median(series, 90)
-    all_vals = [r.trimmed_median or r.median_price for r in series if (r.trimmed_median or r.median_price)]
+    all_vals = [v for v in (daily_price(r) for r in series) if v]
     h.median_all = round(statistics.median(all_vals), 2) if all_vals else None
     cutoff = date.today() - timedelta(days=30)
-    window = [r for r in series if r.day >= cutoff and (r.trimmed_median or r.median_price)]
-    prices = [float(r.trimmed_median or r.median_price) for r in window]  # type: ignore[arg-type]
+    window = [r for r in series if r.day >= cutoff and daily_price(r)]
+    prices = [float(daily_price(r)) for r in window]  # type: ignore[arg-type]
     if len(prices) >= 5:
         k = max(1, len(prices) // 4)
         start, end = statistics.median(prices[:k]), statistics.median(prices[-k:])

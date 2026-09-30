@@ -160,9 +160,13 @@ class PriceSnapshot(Base):
     median_price: Mapped[float | None] = mapped_column(Float)
     trimmed_median: Mapped[float | None] = mapped_column(Float)
     cheapest5_median: Mapped[float | None] = mapped_column(Float)
-    listing_count: Mapped[int] = mapped_column(Integer, default=0)
+    cheapest3_median: Mapped[float | None] = mapped_column(Float)
+    cheapest10_median: Mapped[float | None] = mapped_column(Float)
+    listing_count: Mapped[int] = mapped_column(Integer, default=0)       # valid listings only
+    excluded_count: Mapped[int | None] = mapped_column(Integer)          # rejected by filters
     seller_count: Mapped[int | None] = mapped_column(Integer)
     dispersion: Mapped[float | None] = mapped_column(Float)
+    has_expensive_tail: Mapped[bool] = mapped_column(Boolean, default=False)
     currency: Mapped[str] = mapped_column(String(3), default="NOK")
 
 
@@ -180,6 +184,8 @@ class PriceDaily(Base):
     low_price: Mapped[float | None] = mapped_column(Float)
     median_price: Mapped[float | None] = mapped_column(Float)
     trimmed_median: Mapped[float | None] = mapped_column(Float)
+    cheapest5_median: Mapped[float | None] = mapped_column(Float)   # basis for own history medians
+    cheapest10_median: Mapped[float | None] = mapped_column(Float)
     listing_count: Mapped[float | None] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer, default=0)
 

@@ -38,12 +38,17 @@ modifiers:
 red_flags: [proxy, replica, fake, custom, orica, "fan made", fanmade, reprint, "ikke original",
             kopi, damaged, creased, bøyd, skadet, water damage, vannskade]
 
-# Fair value estimator parameters.
+# Fair value estimator parameters. Fair value = what you can realistically BUY for.
+# With >= min_listings_for_executable valid listings:
+#   fair = 0.60*cheapest-5 median + 0.25*cheapest-10 median + 0.15*own 30d median
+# (weights renormalised over available parts). Broad/trimmed medians never set the price.
 fair_value:
-  min_listings_for_current: 3
-  current_blend: {trimmed_median: 0.6, cheapest5_median: 0.4}
-  history_weight: 0.4            # weight on own 30d median when available
+  min_listings_for_executable: 5
+  executable_weights: {cheapest5: 0.60, cheapest10: 0.25, history30: 0.15}
+  thin_market_history_weight: 0.4  # 1-4 listings: cheapest-3 median blended with own history
+  tail_ratio: 1.30               # trimmed median > cheapest-5 x 1.30 => market_has_expensive_tail
+  low_outlier_ratio: 0.70        # lowest ask < cheapest-5 x 0.70 => lowest_listing_outlier
   min_history_days: 5
-  high_dispersion: 0.5           # (p75-p25)/median above this lowers confidence
+  high_dispersion: 0.5           # (p75-p25)/median of the cheapest 10 above this lowers confidence
   high_volatility: 0.15          # stdev of daily log returns above this lowers confidence
   trim_fraction: 0.2

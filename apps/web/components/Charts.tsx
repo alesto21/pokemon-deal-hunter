@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import type { PriceHistory } from "@/lib/types";
 
-const COLORS = { median: "#2563eb", trimmed: "#7c3aed", low: "#059669", count: "#9ca3af", cost: "#9ca3af", value: "#2563eb" };
+const COLORS = { c5: "#2563eb", median: "#a1a1aa", low: "#059669", count: "#9ca3af", cost: "#9ca3af", value: "#2563eb" };
 
 export function PriceChart({ data }: { data: PriceHistory }) {
   const rows = data.daily.map((d) => ({ ...d }));
@@ -26,8 +26,8 @@ export function PriceChart({ data }: { data: PriceHistory }) {
         <YAxis yAxisId="count" orientation="right" tick={{ fontSize: 11 }} width={40} />
         <Tooltip />
         <Legend />
-        <Line yAxisId="nok" type="monotone" dataKey="median" name="Median" stroke={COLORS.median} dot={false} connectNulls />
-        <Line yAxisId="nok" type="monotone" dataKey="trimmed_median" name="Trimmed median" stroke={COLORS.trimmed} dot={false} connectNulls />
+        <Line yAxisId="nok" type="monotone" dataKey="cheapest5_median" name="Cheapest-5 median (buyable)" stroke={COLORS.c5} strokeWidth={2} dot={false} connectNulls />
+        <Line yAxisId="nok" type="monotone" dataKey="median" name="Broad median (asks)" stroke={COLORS.median} strokeDasharray="3 3" dot={false} connectNulls />
         <Line yAxisId="nok" type="monotone" dataKey="low" name="Low" stroke={COLORS.low} dot={false} connectNulls />
         <Line yAxisId="count" type="stepAfter" dataKey="listing_count" name="Listings" stroke={COLORS.count} strokeDasharray="4 3" dot={false} connectNulls />
         {data.portfolio_entries.map((e, i) => (

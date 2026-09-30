@@ -2,7 +2,7 @@
   "_comment": "Scenario fixtures for the scoring engine. Prices in NOK. history.trend_30d is relative.",
   "obvious_steal": {
     "source": "finn", "title": "Gastly 177/162 Temporal Forces SIR NM", "total_price_nok": 520,
-    "entity_type": "card", "entity_name": "Gastly", "pokemon_name": "Gastly", "rarity": "Special Illustration Rare",
+    "entity_type": "card", "entity_name": "Gastly", "pokemon_name": "Gastly", "rarity": "Illustration Rare",
     "set_code": "TEF", "set_name": "Temporal Forces", "card_number": "177/162",
     "fair_value": 910, "fv_confidence": 0.95, "listing_count": 22,
     "history": {"median_30d": 925, "days_30d": 30, "trend_30d": 0.06},

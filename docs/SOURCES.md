@@ -19,12 +19,24 @@
   and the logs all say `mock`.
 * Endpoints used: `/info`, `/games`, `/categories`, `/expansions`, `/blueprints/export`,
   `/marketplace/products`. Nothing undocumented.
-* The marketplace endpoint returns the cheapest listings per item (not every listing ever). Our
-  stats therefore describe the **current asking market**, not completed sales. CardTrader does not
-  expose sold prices. Our own history (daily aggregates) builds up from the day you start.
+* The marketplace endpoint returns the currently active listings per item. On Temporal Forces we
+  saw up to 185 rows for one card and 81,754 English rows across 5 sets. Whether it is
+  exhaustive for very liquid cards is not documented. Our stats describe the **current asking
+  market**, not completed sales. CardTrader does not expose sold prices. Our own history (daily
+  aggregates of the cheapest-5 median) builds up from the day you start.
 * Tracked sets: `cardtrader_track: true` in `config/sets.yaml`. The collector matches by set code
   or name. If CardTrader uses a different code, set `cardtrader_expansion:` for that set. Run
   `python -m app.cli cardtrader-check --set-code XXX` to see what matched.
+* **Currency quirk (observed 2026-10-01):** `/marketplace/products?expansion_id=` returned every
+  listing in EUR, while `?blueprint_id=` returned the same listing IDs in USD. Native-currency
+  sellers matched (EU sellers in EUR, US sellers in USD), but the cross-currency figures included a
+  ~13% markup in both directions (e.g. a BE listing showed 70.64 EUR and 90.64 USD, and a US
+  listing 115.67 EUR and 116.23 USD). The collector and the debug command both use the
+  per-expansion request only, and warn if a response ever mixes currencies. US/CA listings are
+  therefore priced ~13% above their native asks, which only makes the estimate more conservative.
+  They rarely sit in the cheapest 5 for EU-available cards.
+* Valid-listing filters and exclusion reasons: see ARCHITECTURE.md → "Which listings count", or run
+  `python -m app.cli cardtrader-debug-card --set-code TEF --card-number 177`.
 * Shipping from CardTrader sellers varies by seller and country. We add a flat configurable
   estimate (`estimated_shipping_nok`, default 60 NOK).
 

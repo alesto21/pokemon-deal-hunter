@@ -5,7 +5,9 @@ cardtrader:
   requests_per_second: 2          # API allows 10/s on marketplace; stay well below
   languages: [en]
   accepted_conditions: ["Mint", "Near Mint"]
-  exclude_graded: true
+  exclude_graded: true            # graded flag AND "PSA/BGS/CGC/graded" in the description
+  exclude_reverse_holo: true      # reverse holos share the blueprint but are a different product
+  one_listing_per_seller: true    # a seller's extra copies never fill the cheapest-N window
   estimated_shipping_nok: 60      # added to CardTrader listing totals
   track_sets_from_config: true    # sets with cardtrader_track: true in sets.yaml
   extra_expansion_codes: []       # additional CardTrader expansion codes to scan

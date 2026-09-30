@@ -80,3 +80,73 @@ def test_alert_message_format(cfg):
     assert "Source: FINN" in text and "Shipping: 69 NOK" in text and "Total: 520 NOK" in text
     assert "PSA10 ref: 5 300 NOK" in text
     assert "Why:" in text
+
+
+def test_purge_mock_data_moves_user_data_to_live_card(engine):
+    from app.db.models import PortfolioItem, WatchlistItem
+    from app.services.data_hygiene import mock_rows_present, purge_mock_data, reset_price_history
+
+    scan.run_collector("cardtrader", send_alerts=False)  # mock data
+    with session_scope() as s:
+        mock_gastly = s.scalar(select(Card).where(Card.name == "Gastly", Card.card_number == "177/162"))
+        s.add(WatchlistItem(entity_id=mock_gastly.id, target_type="card"))
+        s.add(PortfolioItem(card_id=mock_gastly.id, acquisition_price_nok=500))
+        live = Card(name="Gastly", pokemon_name="Gastly", set_code="TEF", card_number="177/162",
+                    rarity="Illustration Rare", source_ids={"cardtrader": 281178})
+        s.add(live)
+        s.flush()
+        live_id = live.id
+        assert mock_rows_present(s)
+        out = purge_mock_data(s)
+        assert out["cards_merged"] == 1 and out["snapshots_deleted"] > 0
+        assert not mock_rows_present(s)
+        assert s.scalars(select(WatchlistItem)).one().entity_id == live_id
+        assert s.scalars(select(PortfolioItem)).one().card_id == live_id
+        assert not s.scalars(select(Listing).where(Listing.source == "cardtrader")).all()
+        assert reset_price_history(s)["snapshots_deleted"] == 0
+
+
+def test_dry_run_alerts_do_not_suppress_live_alerts(engine, notifier):
+    from app.notifications.telegram import SendResult
+
+    class DryRun:
+        dry_run = True
+
+        def send(self, text, button_url=None, button_text=""):
+            return SendResult(True, None, True)
+
+    scan.run_collector("cardtrader", send_alerts=False)
+    with session_scope() as s:
+        listing = ingest_url(s, "https://www.finn.no/recommerce/forsale/item/412345670",
+                             title="Gastly 177/162 Temporal Forces NM", price=450, fetch=False)
+        _, _, d1 = evaluate_listing(s, listing, notifier=DryRun())
+        assert d1.notify
+        _, _, d2 = evaluate_listing(s, listing, notifier=DryRun())
+        assert not d2.notify  # dry-run cooldown still applies within dry-run mode
+        _, _, d3 = evaluate_listing(s, listing, notifier=notifier)  # live mode
+        assert d3.notify, d3.blocked_by
+
+
+def test_old_model_evaluations_are_refreshed(engine):
+    from app.services.evaluation import needs_evaluation
+
+    scan.run_collector("cardtrader", send_alerts=False)
+    with session_scope() as s:
+        ev = s.scalars(select(DealEvaluation)).first()
+        listing = s.get(Listing, ev.listing_id)
+        assert not needs_evaluation(s, listing)
+        ev.reason_json = {**ev.reason_json, "fv_model": "old"}
+        s.flush()
+        assert needs_evaluation(s, listing)
+
+
+def test_notification_decision_is_persisted(engine, notifier):
+    scan.run_collector("cardtrader", send_alerts=False)
+    with session_scope() as s:
+        listing = ingest_url(s, "https://www.finn.no/recommerce/forsale/item/412345671",
+                             title="Gastly 177/162 Temporal Forces NM", price=450, fetch=False)
+        evaluate_listing(s, listing, notifier=notifier)
+        lid = listing.id
+    with session_scope() as s:  # fresh session: read back from the database
+        ev = s.scalars(select(DealEvaluation).where(DealEvaluation.listing_id == lid)).one()
+        assert ev.reason_json["notification"]["notify"] is True

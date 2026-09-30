@@ -15,13 +15,14 @@ from sqlalchemy.orm import Session
 
 from app.collectors.base import CollectorResult, RawListing, upsert_listing
 from app.collectors.cardtrader_client import CardTraderAPI, get_cardtrader_client
+from app.collectors.cardtrader_filters import ListingVerdict, classify_listings
 from app.core.config import SetMeta, UserConfig, get_user_config
 from app.core.logging import get_logger
 from app.db.models import Card, EntityType, Product, ProductType, WatchlistItem
 from app.matching.normalize import PRODUCT_KEYWORDS, fold, split_card_number
 from app.pricing.fx import FxRates, get_rates
 from app.pricing.history import record_snapshot
-from app.pricing.stats import compute_stats
+from app.pricing.stats import PriceStats, compute_stats
 
 log = get_logger(__name__)
 SOURCE = "cardtrader"
@@ -35,6 +36,22 @@ def pokemon_name_from(card_name: str) -> str:
         if new == name:
             return name
         name = new
+
+
+_VERSION_NUMBER = re.compile(r"([A-Za-z]{0,4}\d{1,3}[a-z]?/[A-Za-z]{0,4}\d{1,3})\s*$")
+
+
+def parse_version(version: str | None) -> tuple[str | None, str | None]:
+    """CardTrader blueprint ``version`` → (card number with printed total, rarity hint).
+
+    Seen formats: "102/162", "Illustration Rare | 177/162", "Full-Art 193/162".
+    """
+    if not version:
+        return None, None
+    m = _VERSION_NUMBER.search(version.strip())
+    number = m.group(1) if m else None
+    rarity = version.split("|", 1)[0].strip() if "|" in version else None
+    return number, rarity
 
 
 def product_type_from(category_name: str, name: str) -> str | None:
@@ -114,17 +131,20 @@ class CardTraderCollector:
         release: date | None = meta.release_date if meta else None
         ptype = product_type_from(self.category_name(int(bp.get("category_id") or 0)), bp.get("name", ""))
         fixed = bp.get("fixed_properties") or {}
+        version_number, version_rarity = parse_version(bp.get("version"))
+        number = version_number or fixed.get("collector_number")
         if ptype is None:
             card = self._find_by_source_id(session, Card, bp_id) or self._adopt_card(
-                session, bp["name"], set_code, fixed.get("collector_number"), bp_id)
+                session, bp["name"], set_code, number, bp_id)
             if card is None:
                 card = Card(name=bp["name"], source_ids={SOURCE: bp_id})
                 session.add(card)
             card.name = bp["name"]
             card.pokemon_name = pokemon_name_from(bp["name"])
             card.set_name, card.set_code, card.release_date = set_name, set_code, release
-            card.card_number = fixed.get("collector_number") or card.card_number
-            card.rarity = fixed.get("pokemon_rarity") or card.rarity
+            # CardTrader is authoritative for identity: the version carries "number/printed total".
+            card.card_number = number or card.card_number
+            card.rarity = fixed.get("pokemon_rarity") or version_rarity or card.rarity
             card.image_url = bp.get("image_url") or card.image_url
             card.is_promo = "promo" in fold(f"{card.rarity or ''} {set_name or ''}")
             session.flush()
@@ -155,6 +175,14 @@ class CardTraderCollector:
                 return card
         return None
 
+    def _find_entity(self, session: Session, bp_id: int) -> tuple[str, int] | None:
+        """Our (entity_type, id) for a CardTrader blueprint, if it is in the catalogue."""
+        card = self._find_by_source_id(session, Card, bp_id)
+        if card:
+            return EntityType.CARD, card.id
+        product = self._find_by_source_id(session, Product, bp_id)
+        return (EntityType.PRODUCT, product.id) if product else None
+
     @staticmethod
     def _find_by_source_id(session: Session, model, bp_id: int):
         # JSON querying differs across SQLite/Postgres; the catalogue is small, so filter in Python.
@@ -164,20 +192,15 @@ class CardTraderCollector:
         return None
 
     # ------------------------------------------------------------------ scan
-    def _accept(self, p: dict) -> bool:
-        ct = self.cfg.sources.cardtrader
-        props = p.get("properties_hash") or {}
-        lang = props.get("pokemon_language")
-        if ct.languages and lang and lang not in ct.languages:
-            return False
-        cond = props.get("condition")
-        if cond and ct.accepted_conditions and cond not in ct.accepted_conditions:
-            return False
-        if ct.exclude_graded and p.get("graded"):
-            return False
-        if p.get("on_vacation"):
-            return False
-        return (p.get("bundle_size") or 1) == 1
+    def market_stats(self, products: list[dict], fx: FxRates) -> tuple[list[ListingVerdict], PriceStats]:
+        """Filter listings and compute NOK price stats over the valid ones only."""
+        verdicts = classify_listings(products, self.cfg.sources.cardtrader)
+        valid = [v for v in verdicts if v.included]
+        fv_cfg = self.cfg.scoring.fair_value
+        stats = compute_stats([fx.to_nok(v.price_cents / 100, v.product["price"]["currency"]) for v in valid],
+                              [v.seller_id for v in valid], fv_cfg.trim_fraction, fv_cfg.tail_ratio,
+                              fv_cfg.low_outlier_ratio)
+        return verdicts, stats
 
     def collect(self, session: Session) -> CollectorResult:
         result = CollectorResult()
@@ -188,34 +211,44 @@ class CardTraderCollector:
         ct = self.cfg.sources.cardtrader
         for exp, _meta in self.tracked_expansions():
             language = ct.languages[0] if len(ct.languages) == 1 else None
+            # Always the per-expansion endpoint: CardTrader's per-blueprint endpoint shows the same
+            # listings in another display currency with a different cross-currency markup.
             data = self.client.marketplace_products(expansion_id=exp["id"], language=language)
+            currencies = {p["price"]["currency"] for rows in data.values() for p in rows}
+            if len(currencies) > 1:
+                log.warning("cardtrader_mixed_currencies", collector=SOURCE, currencies=sorted(currencies),
+                            expansion=exp.get("code"))
+                result.notes.append(f"{exp.get('code')}: mixed listing currencies {sorted(currencies)}")
             for bp_key, products in data.items():
                 entity = mapping.get(int(bp_key))
                 result.fetched += len(products)
                 if not entity:
                     continue
-                accepted = [p for p in products if self._accept(p)]
-                result.matched += len(accepted)
-                self._record(session, entity, accepted, fx, result)
+                self._record(session, entity, products, fx, result)
         if self.client.is_mock:
             result.notes.append("MOCK data (no CARDTRADER_API_TOKEN configured)")
+        else:
+            from app.services.data_hygiene import mock_rows_present
+
+            if mock_rows_present(session):
+                log.warning("mock_data_present", collector=SOURCE, action="run `python -m app.cli purge-mock-data`")
+                result.notes.append("mock catalogue rows present — run purge-mock-data")
         return result
 
     def _record(self, session: Session, entity: tuple[str, int], products: list[dict], fx: FxRates,
                 result: CollectorResult) -> None:
-        if not products:
+        verdicts, stats = self.market_stats(products, fx)
+        valid = [v.product for v in verdicts if v.included]
+        result.matched += len(valid)
+        if not valid:
             return
-        prices = [fx.to_nok(p["price"]["cents"] / 100, p["price"]["currency"]) for p in products]
-        sellers = [str((p.get("user") or {}).get("id")) for p in products]
-        stats = compute_stats(prices, sellers, self.cfg.scoring.fair_value.trim_fraction)
-        record_snapshot(session, entity[0], entity[1], SOURCE, stats)
-        self._backfill_card_props(session, entity, products[0])
+        record_snapshot(session, entity[0], entity[1], SOURCE, stats, excluded=len(verdicts) - len(valid))
+        self._backfill_card_props(session, entity, valid[0])
         floor = self.cfg.sources.cardtrader.min_fair_value_to_evaluate_nok
-        if (stats.trimmed_median or 0) < floor and entity not in self.always_evaluate:
+        if (stats.cheapest5_median or 0) < floor and entity not in self.always_evaluate:
             return  # bulk: keep the price history, skip deal evaluation
-        n = self.cfg.sources.cardtrader.evaluate_cheapest_n
-        cheapest = sorted(products, key=lambda p: p["price"]["cents"])[:n]
-        for p in cheapest:
+        # Only valid listings (sorted by price) become deal candidates.
+        for p in valid[: self.cfg.sources.cardtrader.evaluate_cheapest_n]:
             listing = upsert_listing(session, self._raw(p, entity), fx)
             result.listing_ids.append(listing.id)
 
@@ -247,6 +280,6 @@ class CardTraderCollector:
         card = session.get(Card, entity[1])
         if card:
             card.card_number = card.card_number or props.get("collector_number")
-            card.rarity = card.rarity or props.get("pokemon_rarity")
+            card.rarity = props.get("pokemon_rarity") or card.rarity  # listing data is authoritative
 
 

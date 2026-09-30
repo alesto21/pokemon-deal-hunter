@@ -157,9 +157,11 @@ class BindersConfig(BaseModel):
 
 
 class FairValueConfig(BaseModel):
-    min_listings_for_current: int = 3
-    current_blend: dict[str, float] = {"trimmed_median": 0.6, "cheapest5_median": 0.4}
-    history_weight: float = 0.4
+    min_listings_for_executable: int = 5
+    executable_weights: dict[str, float] = {"cheapest5": 0.60, "cheapest10": 0.25, "history30": 0.15}
+    thin_market_history_weight: float = 0.4   # <5 listings: lean more on own history
+    tail_ratio: float = 1.30                  # trimmed median > cheapest-5 × this → expensive tail
+    low_outlier_ratio: float = 0.70           # lowest ask < cheapest-5 × this → outlier
     min_history_days: int = 5
     high_dispersion: float = 0.5
     high_volatility: float = 0.15
@@ -214,6 +216,7 @@ class AlertsConfig(BaseModel):
     minimum_discount_good: float = 0.15
     minimum_discount_strong_buy: float = 0.22
     minimum_discount_steal: float = 0.30
+    suspicious_discount: float = 0.45       # deeper than this: warn + cap at STRONG_BUY
     min_match_confidence: float = 0.90
     min_fair_value_confidence: float = 0.5
     allow_damaged: bool = False
@@ -247,6 +250,8 @@ class CardTraderSourceConfig(BaseModel):
     languages: list[str] = ["en"]
     accepted_conditions: list[str] = ["Mint", "Near Mint"]
     exclude_graded: bool = True
+    exclude_reverse_holo: bool = True
+    one_listing_per_seller: bool = True
     estimated_shipping_nok: float = 60
     track_sets_from_config: bool = True
     extra_expansion_codes: list[str] = []

@@ -10,7 +10,7 @@ from app.db.models import Card, WatchlistItem
 
 STARTER_WATCHLIST = [
     # name, set code, number, rarity, target NOK (None = alert on score only)
-    ("Gastly", "TEF", "177/162", "Special Illustration Rare", None),
+    ("Gastly", "TEF", "177/162", "Illustration Rare", None),
     ("Raichu", "PAL", "211/193", "Illustration Rare", None),
     ("Tyranitar", "PAL", "222/193", "Illustration Rare", None),
     ("Eevee", "TWM", "188/167", "Illustration Rare", None),

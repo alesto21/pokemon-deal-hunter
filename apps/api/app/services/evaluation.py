@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import UserConfig, get_user_config
 from app.core.logging import get_logger
@@ -25,7 +26,7 @@ from app.notifications.formatting import format_deal_alert
 from app.notifications.telegram import TelegramNotifier
 from app.portfolio.modifiers import PortfolioState
 from app.portfolio.service import graded_reference, portfolio_state_for_card
-from app.pricing.fair_value import FairValue
+from app.pricing.fair_value import FAIR_VALUE_MODEL_VERSION, FairValue
 from app.pricing.history import latest_snapshot
 from app.scoring.context import EvaluationContext
 from app.scoring.engine import ScoreResult, score_listing
@@ -63,8 +64,8 @@ def _top_chase_value(session: Session, set_code: str | None) -> float | None:
     best = None
     for card in session.scalars(select(Card).where(Card.set_code == set_code)).all():
         snap = latest_snapshot(session, EntityType.CARD, card.id)
-        if snap and snap.trimmed_median and (best is None or snap.trimmed_median > best):
-            best = snap.trimmed_median
+        if snap and snap.cheapest5_median and (best is None or snap.cheapest5_median > best):
+            best = snap.cheapest5_median
     return best
 
 
@@ -134,13 +135,27 @@ def build_context(session: Session, listing: Listing, cfg: UserConfig | None = N
     return ctx
 
 
-def _alert_state(session: Session, listing: Listing) -> AlertState:
-    prev = session.scalar(select(Alert).where(Alert.listing_id == listing.id, Alert.kind == "deal")
+def _alert_state(session: Session, listing: Listing, dry_run: bool) -> AlertState:
+    """Cooldown and daily-cap state. Only alerts from the current mode count, so dry-run
+    history never suppresses real alerts after Telegram is switched on."""
+    prev = session.scalar(select(Alert).where(Alert.listing_id == listing.id, Alert.kind == "deal",
+                                              Alert.dry_run.is_(dry_run))
                           .order_by(Alert.sent_at.desc()).limit(1))
     start_of_day = datetime.combine(utcnow().date(), datetime.min.time())
     today = session.scalar(select(func.count(Alert.id)).where(
-        Alert.kind == "deal", Alert.sent_at >= start_of_day, Alert.severity != "STEAL")) or 0
-    return AlertState(PreviousAlert(prev.sent_at, prev.price_nok) if prev else None, today, utcnow())
+        Alert.kind == "deal", Alert.sent_at >= start_of_day, Alert.severity != "STEAL",
+        Alert.dry_run.is_(dry_run))) or 0
+    entity_prev = None
+    if listing.matched_card_id or listing.matched_product_id:
+        same_entity = (select(Listing.id).where(Listing.matched_card_id == listing.matched_card_id)
+                       if listing.matched_card_id else
+                       select(Listing.id).where(Listing.matched_product_id == listing.matched_product_id))
+        entity_prev = session.scalar(select(Alert).where(
+            Alert.kind == "deal", Alert.dry_run.is_(dry_run), Alert.listing_id.in_(same_entity))
+            .order_by(Alert.sent_at.desc()).limit(1))
+    return AlertState(PreviousAlert(prev.sent_at, prev.price_nok) if prev else None,
+                      PreviousAlert(entity_prev.sent_at, entity_prev.price_nok) if entity_prev else None,
+                      today, utcnow())
 
 
 def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = True,
@@ -152,6 +167,8 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
     reason = result.to_json()
     reason["fair_value_explanation"] = fv.explanation if fv else []
     reason["history"] = ctx.history.__dict__
+    reason["fair_value_flags"] = fv.flags if fv else []
+    reason["fv_model"] = FAIR_VALUE_MODEL_VERSION
     ev = DealEvaluation(
         listing_id=listing.id, price_nok=listing.total_price_nok,
         fair_value_nok=fv.fair_value_nok if fv else None, fair_value_low=fv.fair_value_low if fv else None,
@@ -172,10 +189,12 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
     session.flush()
     decision = None
     if send_alerts and listing.status == "active":
-        decision = decide(ctx, result, _alert_state(session, listing), cfg)
+        notifier = notifier or TelegramNotifier()
+        decision = decide(ctx, result, _alert_state(session, listing, notifier.dry_run), cfg)
         reason["notification"] = {"notify": decision.notify, "severity": decision.severity,
                                   "blocked_by": decision.blocked_by}
-        ev.reason_json = dict(reason)
+        # The dict was already flushed; mutating it in place is invisible to SQLAlchemy.
+        flag_modified(ev, "reason_json")
         if decision.notify and decision.severity:
             _send_alert(session, listing, ev, ctx, result, decision.severity, notifier)
     log.info("listing_evaluated", source=listing.source, listing_id=listing.id,
@@ -203,6 +222,8 @@ def needs_evaluation(session: Session, listing: Listing, max_age_hours: float = 
     last = session.scalar(select(DealEvaluation).where(DealEvaluation.listing_id == listing.id)
                           .order_by(DealEvaluation.timestamp.desc()).limit(1))
     if last is None:
+        return True
+    if (last.reason_json or {}).get("fv_model") != FAIR_VALUE_MODEL_VERSION:
         return True
     if abs(last.price_nok - listing.total_price_nok) > 0.5:
         return True

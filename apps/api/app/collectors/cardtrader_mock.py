@@ -23,7 +23,7 @@ EXPANSIONS = [
 
 # (blueprint_id, expansion_id, category, name, collector_number, rarity, base_eur, n_listings, deal_factor)
 _BP = [
-    (900001, 3601, CAT_SINGLE, "Gastly", "177/162", "Special Illustration Rare", 78.0, 14, 0.66),
+    (900001, 3601, CAT_SINGLE, "Gastly", "177/162", "Illustration Rare", 78.0, 14, 0.66),
     (900002, 3601, CAT_SINGLE, "Walking Wake ex", "205/162", "Special Illustration Rare", 28.0, 20, None),
     (900003, 3601, CAT_SINGLE, "Gastly", "062/162", "Common", 0.15, 40, 0.5),
     (900004, 3601, CAT_SINGLE, "Iron Leaves ex", "203/162", "Special Illustration Rare", 24.0, 18, None),
@@ -40,6 +40,8 @@ _BP = [
     (900403, 3450, CAT_BUNDLE, "151 Booster Bundle", None, None, 58.0, 10, None),
     (900404, 3450, CAT_ETB, "151 Elite Trainer Box", None, None, 92.0, 7, None),
 ]
+
+MOCK_BLUEPRINT_IDS = frozenset(bp[0] for bp in _BP)
 
 _CATEGORIES = [
     {"id": CAT_SINGLE, "name": "Pokemon Single Card", "game_id": GAME_ID, "properties": []},
@@ -75,7 +77,8 @@ class MockCardTraderClient:
             if exp_id != expansion_id:
                 continue
             fixed = {"collector_number": num, "pokemon_rarity": rarity} if num else {}
-            out.append({"id": bp_id, "name": name, "version": None, "game_id": GAME_ID, "category_id": cat,
+            version = f"{rarity} | {num}" if num else None  # same shape as live CardTrader
+            out.append({"id": bp_id, "name": name, "version": version, "game_id": GAME_ID, "category_id": cat,
                         "expansion_id": exp_id, "image_url": None, "fixed_properties": fixed,
                         "editable_properties": []})
         return out

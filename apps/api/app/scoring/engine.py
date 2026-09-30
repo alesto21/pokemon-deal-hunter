@@ -182,6 +182,9 @@ def score_listing(ctx: EvaluationContext, cfg: UserConfig) -> ScoreResult:
     total = round(max(0.0, min(100.0, base + sum(mods.values()))), 1)
     rec = recommendation_for(total, sc.bands)
 
+    if discount >= cfg.alerts.suspicious_discount:
+        warnings.insert(0, f"unusually cheap ({discount:.0%} below fair value) — verify listing, condition "
+                           "and authenticity before buying")
     if discount > 0.02:
         reasons.append(f"price {discount:.0%} below fair value")
     elif discount < -0.02:

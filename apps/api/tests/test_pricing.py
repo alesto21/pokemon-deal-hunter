@@ -5,12 +5,11 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
-from app.core.config import FairValueConfig, GradingConfig
+from app.core.config import GradingConfig
 from app.db.models import PriceDaily
-from app.pricing.fair_value import CurrentMarket, estimate_fair_value
 from app.pricing.fx import FxRates, get_rates, refresh_rates
 from app.pricing.grading import grading_economics
-from app.pricing.history import HistoryStats, compute_history_stats
+from app.pricing.history import compute_history_stats
 from app.pricing.sealed import analyse_sealed
 from app.pricing.stats import compute_stats, interpolate, trimmed_median
 
@@ -53,8 +52,10 @@ def test_compute_stats_basic():
     assert s.low == 98
     assert s.count == 7
     assert s.seller_count == 6
+    assert s.cheapest3_median == 100
     assert s.cheapest5_median == 102  # median of 98,100,102,105,110
-    assert s.trimmed_median < s.median or s.trimmed_median == s.median
+    assert s.cheapest10_median is None  # fewer than 10 listings
+    assert s.trimmed_median <= s.median
     assert s.dispersion is not None
 
 
@@ -74,57 +75,17 @@ def test_interpolate_clamps_and_interpolates():
     assert interpolate(curve, 1) == 1
 
 
-# ---------------------------------------------------------------- fair value
-FV = FairValueConfig()
-
-
-def test_fair_value_is_not_just_the_cheapest_listing():
-    cur = CurrentMarket(low=50, median=100, trimmed_median=98, cheapest5_median=90, listing_count=12, dispersion=0.2)
-    fv = estimate_fair_value(cur, HistoryStats(), FV)
-    assert fv.fair_value_nok == pytest.approx(0.6 * 98 + 0.4 * 90, rel=1e-3)
-    assert fv.fair_value_nok > cur.low
-    assert fv.fair_value_low < fv.fair_value_nok < fv.fair_value_high
-
-
-def test_fair_value_blends_history():
-    cur = CurrentMarket(trimmed_median=100, cheapest5_median=100, listing_count=12)
-    hist = HistoryStats(median_30d=80, days_30d=20)
-    fv = estimate_fair_value(cur, hist, FV)
-    assert fv.fair_value_nok == pytest.approx(100 * 0.6 + 80 * 0.4)
-
-
-def test_fair_value_confidence_drops_with_thin_dispersed_volatile_data():
-    good = estimate_fair_value(CurrentMarket(trimmed_median=100, cheapest5_median=100, listing_count=15),
-                               HistoryStats(median_30d=100, days_30d=30), FV)
-    thin = estimate_fair_value(CurrentMarket(trimmed_median=100, cheapest5_median=100, listing_count=1),
-                               HistoryStats(), FV)
-    messy = estimate_fair_value(
-        CurrentMarket(trimmed_median=100, cheapest5_median=100, listing_count=15, dispersion=0.9),
-        HistoryStats(median_30d=100, days_30d=30, volatility_30d=0.3), FV, identity_confidence=0.8)
-    assert good.confidence > thin.confidence
-    assert good.confidence > messy.confidence
-    assert messy.fair_value_high - messy.fair_value_low > good.fair_value_high - good.fair_value_low
-
-
-def test_fair_value_falling_market_is_conservative():
-    cur = CurrentMarket(trimmed_median=80, cheapest5_median=80, listing_count=10)
-    fv = estimate_fair_value(cur, HistoryStats(median_30d=120, days_30d=30, trend_30d=-0.2), FV)
-    assert fv.fair_value_nok == 80
-
-
-def test_fair_value_without_data():
-    fv = estimate_fair_value(CurrentMarket(), HistoryStats(), FV)
-    assert fv.fair_value_nok is None and fv.confidence == 0
-
-
+# ---------------------------------------------------------------- history
 def test_history_stats_trend_and_windows():
     today = date.today()
     series = [PriceDaily(entity_type="card", entity_id=1, source="x", day=today - timedelta(days=29 - i),
-                         median_price=100 + i, trimmed_median=100 + i, listing_count=10) for i in range(30)]
+                         median_price=500, trimmed_median=500, cheapest5_median=100 + i, listing_count=10)
+              for i in range(30)]
     h = compute_history_stats(series)
     assert h.median_7d > h.median_30d
     assert h.trend_30d > 0.15
     assert h.days_30d == 30
+    assert h.median_30d < 150  # history is built from the executable (cheapest-5) price, not the tail
 
 
 # ---------------------------------------------------------------- grading

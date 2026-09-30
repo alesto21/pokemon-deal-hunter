@@ -5,7 +5,10 @@ WORKDIR /srv/apps/api
 
 # Dependencies first for layer caching.
 COPY apps/api/pyproject.toml ./
-RUN mkdir app && touch app/__init__.py && pip install . && rm -rf app build *.egg-info
+# Install only the dependencies: installing the project itself would put an empty stub
+# `app` package into site-packages that shadows the real code for scripts run outside WORKDIR.
+RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" \
+      > /tmp/requirements.txt && pip install -r /tmp/requirements.txt
 
 COPY apps/api/ ./
 COPY config/ /srv/config/

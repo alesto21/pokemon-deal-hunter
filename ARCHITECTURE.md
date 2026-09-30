@@ -58,12 +58,14 @@ with the same boundaries. Collectors stay isolated from each other: a collector 
 
 1. `worker` → `services.scan.run_collector("cardtrader")` takes the source lock.
 2. `CardTraderCollector.sync_catalog` upserts cards/products for tracked sets (`config/sets.yaml`).
-3. One `GET /marketplace/products?expansion_id=…&language=en` per set. Listings are filtered
-   (language, NM/Mint, not graded, not on vacation, single copies). Prices are converted to NOK.
-4. `compute_stats` → `PriceSnapshot` (low, median, trimmed median, cheapest-5 median, count,
-   seller count, dispersion).
-5. The cheapest N listings per item become `Listing`s (bulk under
-   `min_fair_value_to_evaluate_nok` is priced but never evaluated, unless it is on the watchlist).
+3. One `GET /marketplace/products?expansion_id=…&language=en` per set. Every listing is
+   classified by `cardtrader_filters.classify_listings` (see "Which listings count" below).
+   Valid prices are converted to NOK.
+4. `compute_stats` over the valid listings → `PriceSnapshot` (low, cheapest-3/5/10 medians, broad
+   and trimmed medians, valid and excluded counts, seller count, dispersion of the cheapest 10,
+   expensive-tail flag).
+5. The cheapest N **valid** listings per item become `Listing`s. Bulk with a cheapest-5 median under
+   `min_fair_value_to_evaluate_nok` is priced but never evaluated, unless it is on the watchlist.
 6. `services.evaluation.evaluate_listing`: build context (fair value, history, PSA refs, portfolio,
    watchlist), then `score_listing`, then `DealEvaluation`, then `policy.decide`, then maybe Telegram → `Alert`.
 7. Unseen listings are marked `gone`. Today's `PriceDaily` aggregate is refreshed.
@@ -71,14 +73,49 @@ with the same boundaries. Collectors stay isolated from each other: a collector 
    sent, and a recovery message follows the next success.
 9. Active FINN/manual listings are re-scored against the fresh fair values (no network).
 
-## Fair value (`pricing/fair_value.py`)
+## Which listings count (`collectors/cardtrader_filters.py`)
 
-* ≥3 listings: `0.6 × trimmed median + 0.4 × cheapest-5 median` (the trimmed median drops the top
-  20% of asks).
-* Own 30-day median available (≥5 days): blended in with weight 0.4.
-* Falling market (30d trend < −5%): use the lower current value.
-* Confidence is multiplied down for few listings, dispersion > 0.5, volatility > 0.15, missing
-  history and identity confidence < 1. The low–high band widens accordingly.
+A CardTrader blueprint is one printing (its `version` carries rarity + `number/printed total`).
+Within a blueprint, a listing counts toward prices only if it passes every filter. Each rejection
+has a named reason, visible in `cardtrader-debug-card`:
+
+- English only (API `language=en` plus a per-listing check)
+- Mint/Near Mint only
+- not graded: CardTrader's `graded` flag **or** PSA/BGS/CGC/"graded"/"slab" in the description
+  (live data had PSA 9 slabs listed as "Near Mint")
+- not reverse holo (`pokemon_reverse`: same blueprint, different product), not 1st edition,
+  not signed, not altered
+- no fake/foreign red flags in the description
+- not on vacation, not a multi-card bundle
+- **one listing per seller** (the seller's cheapest), so one seller's inventory cannot fill the
+  cheapest-N window
+
+Prices always come from the per-expansion marketplace request. CardTrader's per-blueprint request
+returns the same listings in another display currency, with a ~13% cross-currency markup (see
+docs/SOURCES.md).
+
+## Fair value (`pricing/fair_value.py`, model `executable-v3`)
+
+Fair value is what you can realistically **buy** for, not the average ask. Stale, overpriced
+asks commonly sit 30–60% above the buyable market.
+
+* ≥5 valid listings: `0.60 × cheapest-5 median + 0.25 × cheapest-10 median + 0.15 × own 30d
+  median`, with weights renormalised over the parts that exist. Without history this is ~71/29
+  cheapest-5/cheapest-10.
+* 1–4 listings (thin market): cheapest-3 median, blended 60/40 with own history if available.
+  Confidence is 0.3–0.6, which is below the alert threshold for 1–2 listings.
+* The broad and trimmed medians **never set the price**. `market_has_expensive_tail` is flagged
+  when the trimmed median is > 1.30 × the cheapest-5 median.
+* One cheap listing cannot define fair value (it is at most one of five values in the median).
+  `lowest_listing_outlier` is flagged when low < 0.70 × the cheapest-5 median.
+* Own history (7/30/90 days) is built from daily **cheapest-5** medians, so the tail cannot creep
+  back in through history.
+* Falling market (30-day trend < −5%): capped at the current executable price.
+* Confidence goes down for thin markets, a sharp price step after the 5 cheapest (cheapest-10 >
+  1.3 × cheapest-5), dispersion among the cheapest 10, volatility, missing history and identity
+  uncertainty. The low–high band widens accordingly.
+* Every evaluation stores `fv_model`. When the model changes, old evaluations are re-scored on the
+  next scan.
 * Graded listings are valued only against manual graded references, never raw prices.
 * Lots: conservative value = Σ(item low fair value) × 0.85, with confidence tied to how many items
   are priced.
@@ -99,7 +136,11 @@ Bands: 0–59 IGNORE, 60–74 WATCH, 75–84 GOOD, 85–92 STRONG BUY, 93–100 
 ## Notification policy (`scoring/policy.py`)
 
 The alert severity is the lower of two levels: the score band, and the level the raw discount
-supports (15/22/30%). A STEAL score with an 18% discount therefore alerts as GOOD. Hard filters:
+supports (15/22/30%). A STEAL score with an 18% discount therefore alerts as GOOD. A discount
+deeper than 45% (`suspicious_discount`) is capped at STRONG BUY with a "verify listing" warning:
+in live data these were stale or mispriced listings, so they must not bypass the daily cap as
+STEALs. Cooldowns apply per listing **and per card**, so two sellers at the same price produce
+one alert. Only alerts from the current mode count: dry-run history never suppresses live alerts. Hard filters:
 fair value ≥ 250 NOK (unless the item is on the high-priority watchlist), match confidence ≥ 0.90,
 fair-value confidence ≥ 0.5, no damaged/played condition, not an ignored Pokémon, no duplicate
 unless the discount is > 35%, seller confidence ≥ 0.3. GOOD also needs a special rule (watchlist

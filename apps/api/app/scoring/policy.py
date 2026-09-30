@@ -23,7 +23,8 @@ class PreviousAlert:
 
 @dataclass
 class AlertState:
-    previous: PreviousAlert | None = None
+    previous: PreviousAlert | None = None          # last alert for this listing
+    previous_entity: PreviousAlert | None = None   # last alert for the same card/product (any listing)
     alerts_today: int = 0
     now: datetime | None = None
 
@@ -33,6 +34,10 @@ class Decision:
     notify: bool
     severity: str | None
     blocked_by: list[str] = field(default_factory=list)
+
+
+def _dropped(prev: PreviousAlert, price: float, min_drop: float) -> bool:
+    return bool(prev.price_nok and prev.price_nok > 0 and (prev.price_nok - price) / prev.price_nok >= min_drop)
 
 
 def _discount_level(discount: float, cfg: UserConfig) -> str:
@@ -63,9 +68,14 @@ def decide(ctx: EvaluationContext, result: ScoreResult, state: AlertState, cfg: 
 
     # Severity = min(score band, band supported by the raw discount).
     level = min(LEVELS.index(result.recommendation), LEVELS.index(_discount_level(discount, cfg)))
+    if discount >= a.suspicious_discount:
+        level = min(level, LEVELS.index("STRONG_BUY"))
     severity = LEVELS[level]
     if severity in ("IGNORE", "WATCH"):
-        return Decision(False, severity, [f"recommendation {severity}"])
+        if result.recommendation in ("IGNORE", "WATCH"):
+            return Decision(False, severity, [f"score {result.total_score:.0f} is {result.recommendation}"])
+        return Decision(False, severity, [f"discount {discount:.1%} below the {a.minimum_discount_good:.0%} "
+                                          f"minimum for an alert (score says {result.recommendation})"])
     if severity == "GOOD" and not _good_rule_hit(ctx, result, cfg):
         blocked.append("GOOD without special rule (watchlist target / high-priority missing / premium fit)")
 
@@ -90,10 +100,13 @@ def decide(ctx: EvaluationContext, result: ScoreResult, state: AlertState, cfg: 
     if state.previous:
         prev = state.previous
         cooled = now - prev.sent_at >= timedelta(hours=a.repeat_cooldown_hours)
-        dropped = (prev.price_nok is not None and prev.price_nok > 0 and
-                   (prev.price_nok - ctx.total_price_nok) / prev.price_nok >= a.repeat_min_price_drop)
-        if not (cooled and dropped):
+        if not (cooled and _dropped(prev, ctx.total_price_nok, a.repeat_min_price_drop)):
             blocked.append("already alerted (cooldown / no meaningful price drop)")
+    elif state.previous_entity:
+        prev = state.previous_entity
+        recent = now - prev.sent_at < timedelta(hours=a.repeat_cooldown_hours)
+        if recent and not _dropped(prev, ctx.total_price_nok, a.repeat_min_price_drop):
+            blocked.append("same card alerted recently at a similar or lower price")
     steal_exempt = severity == "STEAL" and a.steal_ignores_daily_cap
     if state.alerts_today >= a.max_alerts_per_day and not steal_exempt:
         blocked.append(f"daily alert cap ({a.max_alerts_per_day}) reached")

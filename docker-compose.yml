@@ -32,7 +32,7 @@ services:
 
   # One-shot: applies Alembic migrations, then exits. api/worker wait for it.
   migrate:
-    build: { context: ., dockerfile: apps/api/Dockerfile }
+    build: &api-build { context: ., dockerfile: apps/api/Dockerfile }
     image: pokemon-deal-hunter-api:latest
     environment: *app-env
     command: ["alembic", "upgrade", "head"]
@@ -41,6 +41,7 @@ services:
     restart: "no"
 
   api:
+    build: *api-build   # same image as migrate/worker; any of them can trigger the (cached) build
     image: pokemon-deal-hunter-api:latest
     restart: unless-stopped
     environment: *app-env
@@ -54,6 +55,7 @@ services:
       migrate: { condition: service_completed_successfully }
 
   worker:
+    build: *api-build
     image: pokemon-deal-hunter-api:latest
     restart: unless-stopped
     environment: *app-env

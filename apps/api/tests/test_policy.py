@@ -105,3 +105,25 @@ def test_ignored_pokemon_blocked(cfg):
     cfg.pokemon.ignored = ["Gastly"]
     ctx = make_ctx("obvious_steal")
     assert not decide(ctx, score_listing(ctx, cfg), AlertState(now=NOW), cfg).notify
+
+
+def test_suspiciously_deep_discount_is_capped_and_warned(cfg):
+    ctx = make_ctx("obvious_steal", total_price_nok=400)  # ~56% below fair value
+    r = forced(score_listing(ctx, cfg), "STEAL", 98)
+    assert any("verify listing" in w for w in r.warnings)
+    d = decide(ctx, r, AlertState(now=NOW), cfg)
+    assert d.notify and d.severity == "STRONG_BUY"
+    capped = AlertState(alerts_today=cfg.alerts.max_alerts_per_day, now=NOW)
+    assert not decide(ctx, r, capped, cfg).notify  # no longer bypasses the daily cap
+
+
+def test_same_card_from_another_listing_is_not_realerted(cfg):
+    ctx = make_ctx("obvious_steal")
+    r = score_listing(ctx, cfg)
+    recent_same_price = PreviousAlert(NOW - timedelta(hours=1), 520)
+    d = decide(ctx, r, AlertState(previous_entity=recent_same_price, now=NOW), cfg)
+    assert not d.notify and any("same card" in b for b in d.blocked_by)
+    much_cheaper_now = PreviousAlert(NOW - timedelta(hours=1), 700)
+    assert decide(ctx, r, AlertState(previous_entity=much_cheaper_now, now=NOW), cfg).notify
+    long_ago = PreviousAlert(NOW - timedelta(hours=48), 520)
+    assert decide(ctx, r, AlertState(previous_entity=long_ago, now=NOW), cfg).notify

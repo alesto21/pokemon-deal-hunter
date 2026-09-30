@@ -225,6 +225,7 @@ export interface FairValue {
   fair_value_high: number | null;
   confidence: number;
   explanation: string[];
+  flags: string[];
 }
 
 export interface HistoryStats {
@@ -245,6 +246,10 @@ export interface CurrentMarket {
   cheapest5_median: number | null;
   listing_count: number;
   dispersion: number | null;
+  cheapest3_median: number | null;
+  cheapest10_median: number | null;
+  has_expensive_tail: boolean;
+  low_is_outlier: boolean;
 }
 
 export interface PriceHistory {
@@ -252,8 +257,25 @@ export interface PriceHistory {
   entity_id: number;
   label: string;
   set_name: string | null;
-  daily: { day: string; low: number | null; median: number | null; trimmed_median: number | null; listing_count: number | null }[];
-  raw: { timestamp: string; low: number | null; median: number | null; trimmed_median: number | null; listing_count: number }[];
+  daily: {
+    day: string;
+    low: number | null;
+    median: number | null;
+    trimmed_median: number | null;
+    cheapest5_median: number | null;
+    cheapest10_median: number | null;
+    listing_count: number | null;
+  }[];
+  raw: {
+    timestamp: string;
+    low: number | null;
+    median: number | null;
+    trimmed_median: number | null;
+    cheapest5_median: number | null;
+    cheapest10_median: number | null;
+    listing_count: number;
+    has_expensive_tail: boolean;
+  }[];
   portfolio_entries: { date: string | null; price_nok: number; quantity: number }[];
   fair_value: FairValue;
   history: HistoryStats;

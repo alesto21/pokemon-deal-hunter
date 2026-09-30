@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from app.core.config import REPO_ROOT, get_settings, get_user_config
 from app.core.logging import configure_logging
+from app.db.base import utcnow
 from app.db.session import session_scope
 
 cli = typer.Typer(help="Pokémon Deal Hunter", no_args_is_help=True, add_completion=False)
@@ -201,31 +202,214 @@ def sync_catalog() -> None:
         typer.echo(f"{len(mapping)} blueprints synced")
 
 
-@cli.command("cardtrader-check")
-def cardtrader_check(set_code: str = typer.Option("TEF", help="Set code from config/sets.yaml")) -> None:
-    """Sample CardTrader query: auth + one expansion's marketplace stats."""
-    from app.collectors.cardtrader import CardTraderCollector
-    from app.pricing.stats import compute_stats
-
-    c = CardTraderCollector()
-    typer.echo(f"mode: {'MOCK' if c.client.is_mock else 'LIVE'} | info: {c.client.info().get('name')}")
-    typer.echo(f"pokemon game_id: {c.game_id}")
+def _cardtrader_expansion(c, set_code: str) -> dict:
     exps = [e for e, meta in c.tracked_expansions() if meta and meta.code.upper() == set_code.upper()]
     if not exps:
         raise typer.BadParameter(f"{set_code} is not a tracked set that CardTrader knows")
-    exp = exps[0]
-    data = c.client.marketplace_products(expansion_id=exp["id"])
-    bps = {b["id"]: b["name"] for b in c.client.blueprints(exp["id"])}
+    return exps[0]
+
+
+def _live_fair_value(session, entity: tuple[str, int] | None, stats):
+    """Fair value from freshly fetched stats + our stored history (same code path as scoring)."""
+    from app.pricing.fair_value import CurrentMarket, estimate_fair_value
+    from app.pricing.history import HistoryStats, compute_history_stats, daily_series
+
+    current = CurrentMarket(low=stats.low, median=stats.median, trimmed_median=stats.trimmed_median,
+                            cheapest5_median=stats.cheapest5_median, listing_count=stats.count,
+                            dispersion=stats.dispersion, cheapest3_median=stats.cheapest3_median,
+                            cheapest10_median=stats.cheapest10_median,
+                            has_expensive_tail=stats.has_expensive_tail, low_is_outlier=stats.low_is_outlier)
+    history = compute_history_stats(daily_series(session, *entity, 90)) if entity else HistoryStats()
+    return estimate_fair_value(current, history, get_user_config().scoring.fair_value), history
+
+
+def _eur(v: float | None, eur_nok: float) -> str:
+    return "-" if v is None else f"{v / eur_nok:7.2f}"
+
+
+@cli.command("cardtrader-check")
+def cardtrader_check(set_code: str = typer.Option("TEF", help="Set code from config/sets.yaml"),
+                     top: int = typer.Option(15, help="How many of the most valuable cards to show")) -> None:
+    """Sample CardTrader query: auth + one expansion's executable-market stats and fair values."""
+    from app.collectors.cardtrader import CardTraderCollector
+    from app.pricing.fx import get_rates
+
+    c = CardTraderCollector()
+    typer.echo(f"mode: {'MOCK' if c.client.is_mock else 'LIVE'} | info: {c.client.info().get('name')}")
+    exp = _cardtrader_expansion(c, set_code)
+    ct = get_user_config().sources.cardtrader
+    data = c.client.marketplace_products(expansion_id=exp["id"],
+                                         language=ct.languages[0] if len(ct.languages) == 1 else None)
+    bps = {b["id"]: b for b in c.client.blueprints(exp["id"])}
     typer.echo(f"expansion {exp['name']} ({exp['code']}): {len(data)} blueprints with listings")
-    rows = []
-    for bp_id, products in data.items():
-        ok = [p for p in products if c._accept(p)]
-        st = compute_stats([p["price"]["cents"] / 100 for p in ok])
-        if st.count:
-            rows.append((st.trimmed_median or 0, bps.get(int(bp_id), bp_id), st))
-    for _, name, st in sorted(rows, key=lambda r: -r[0])[:10]:
-        typer.echo(f"  {str(name)[:32]:32} n={st.count:3} low={st.low:7.2f} c5med={st.cheapest5_median:7.2f} "
-                   f"trim={st.trimmed_median:7.2f} disp={st.dispersion if st.dispersion is not None else '-'} (EUR)")
+    with session_scope() as s:
+        fx = get_rates(s)
+        eur = fx.nok_per_unit["EUR"]
+        rows = []
+        for bp_id, products in data.items():
+            verdicts, st = c.market_stats(products, fx)
+            if st.count:
+                rows.append((st.cheapest5_median or 0, bps.get(int(bp_id), {}), st, len(verdicts)))
+        typer.echo(f"{'card':34} {'valid/all':>9} {'low':>7} {'c5':>7} {'c10':>7} {'trim':>7} {'FAIR':>7} "
+                   f"{'conf':>5}  flags   (EUR; fair value uses stored history)")
+        for _, bp, st, total in sorted(rows, key=lambda r: -r[0])[:top]:
+            entity = c._find_entity(s, int(bp.get("id", 0)))
+            fv, _ = _live_fair_value(s, entity, st)
+            label = f"{bp.get('name', '?')} {bp.get('version') or ''}"[:34]
+            typer.echo(f"{label:34} {st.count:>4}/{total:<4} {_eur(st.low, eur)} {_eur(st.cheapest5_median, eur)} "
+                       f"{_eur(st.cheapest10_median, eur)} {_eur(st.trimmed_median, eur)} "
+                       f"{_eur(fv.fair_value_nok, eur)} {fv.confidence:5.2f}  {','.join(fv.flags)}")
+
+
+def _print_listing_rows(verdicts, fx) -> None:
+    typer.echo(f"{'listing':>10} {'seller':20} {'cc':2} {'lang':4} {'condition':17} {'qty':>3} "
+               f"{'price':>8} {'cur':3} {'NOK':>8}  {'used':9} reason")
+    rank = 0
+    for v in verdicts:
+        p = v.product
+        props, user = p.get("properties_hash") or {}, p.get("user") or {}
+        nok = fx.to_nok(v.price_cents / 100, p["price"]["currency"])
+        tag = "no"
+        if v.included:
+            rank += 1
+            tag = f"YES #{rank}" + (" c5" if rank <= 5 else " c10" if rank <= 10 else "")
+        seller = str(user.get("username", ""))[:20]
+        typer.echo(f"{p['id']:>10} {seller:20} {user.get('country_code') or '':2} "
+                   f"{str(props.get('pokemon_language')):4} {str(props.get('condition')):17} "
+                   f"{p.get('quantity', ''):>3} {v.price_cents / 100:8.2f} {p['price']['currency']:3} "
+                   f"{nok:8.0f}  {tag:9} {v.reason or ''}")
+
+
+@cli.command("cardtrader-debug-card")
+def cardtrader_debug_card(
+    set_code: str = typer.Option(..., help="Set code from config/sets.yaml, e.g. TEF"),
+    card_number: str = typer.Option(..., help="Collector number, e.g. 177 or 177/162"),
+    all_languages: bool = typer.Option(False, help="Also fetch non-configured languages (shown as excluded)"),
+    rows: bool = typer.Option(True, help="Print individual listings"),
+) -> None:
+    """Show every CardTrader listing for one card, whether it counts, why not, and the resulting fair value.
+
+    Uses exactly the collector's request and filters, so the numbers match what scoring sees."""
+    from app.collectors.cardtrader import CardTraderCollector, parse_version
+    from app.matching.normalize import split_card_number
+    from app.pricing.fx import get_rates
+
+    c = CardTraderCollector()
+    exp = _cardtrader_expansion(c, set_code)
+    wanted = split_card_number(card_number)[0]
+    matches = [b for b in c.client.blueprints(exp["id"])
+               if split_card_number(parse_version(b.get("version"))[0]
+                                    or (b.get("fixed_properties") or {}).get("collector_number"))[0] == wanted]
+    if not matches:
+        raise typer.BadParameter(f"no blueprint with number {card_number} in {exp['name']}")
+    ct = get_user_config().sources.cardtrader
+    language = None if all_languages or len(ct.languages) != 1 else ct.languages[0]
+    # Same request as the collector (per expansion). CardTrader's per-blueprint endpoint returns
+    # the same listings in a different display currency with a different cross-currency markup.
+    data = c.client.marketplace_products(expansion_id=exp["id"], language=language)
+    with session_scope() as s:
+        fx = get_rates(s)
+        eur = fx.nok_per_unit["EUR"]
+        for bp in matches:
+            products = data.get(str(bp["id"]), [])
+            currencies = sorted({p["price"]["currency"] for p in products})
+            if len(currencies) > 1:
+                typer.echo(f"WARNING: mixed listing currencies {currencies}")
+            verdicts, st = c.market_stats(products, fx)
+            entity = c._find_entity(s, int(bp["id"]))
+            typer.echo(f"\n=== {bp['name']} | version: {bp.get('version')} | blueprint {bp['id']} | "
+                       f"{'MOCK' if c.client.is_mock else 'LIVE'} | 1 EUR = {eur:.4f} NOK"
+                       f"{' (fallback rate!)' if fx.fallback else ''}")
+            typer.echo(f"filters: languages={ct.languages} conditions={ct.accepted_conditions} "
+                       f"graded={'excluded' if ct.exclude_graded else 'allowed'} "
+                       f"reverse={'excluded' if ct.exclude_reverse_holo else 'allowed'} "
+                       f"one-per-seller={ct.one_listing_per_seller}")
+            if rows:
+                _print_listing_rows(verdicts, fx)
+            excluded: dict[str, int] = {}
+            for v in verdicts:
+                if not v.included:
+                    key = v.reason.split(" ", 1)[0] if v.reason and v.reason.startswith(("language", "condition")) \
+                        else v.reason or "?"
+                    excluded[key] = excluded.get(key, 0) + 1
+            typer.echo(f"\nlistings: {len(verdicts)} fetched, {st.count} valid, excluded: {excluded or 'none'}")
+            fv, hist = _live_fair_value(s, entity, st)
+            def line(name: str, v: float | None) -> None:
+                typer.echo(f"  {name:22} {('-' if v is None else f'{v:8.0f} NOK'):>12}   {_eur(v, eur)} EUR")
+            line("market_low", st.low)
+            line("cheapest_3_median", st.cheapest3_median)
+            line("cheapest_5_median", st.cheapest5_median)
+            line("cheapest_10_median", st.cheapest10_median)
+            line("broad_median", st.median)
+            line("trimmed_median", st.trimmed_median)
+            line("own_30d_median", hist.median_30d)
+            line("FAIR VALUE", fv.fair_value_nok)
+            line("fair_value_low", fv.fair_value_low)
+            line("fair_value_high", fv.fair_value_high)
+            typer.echo(f"  {'confidence':22} {fv.confidence:12.2f}")
+            typer.echo(f"  {'market_has_expensive_tail':22} {st.has_expensive_tail!s:>12}")
+            typer.echo(f"  {'lowest_listing_outlier':22} {st.low_is_outlier!s:>12}")
+            typer.echo(f"  {'flags':22} {', '.join(fv.flags) or '-':>12}")
+            for note in fv.explanation:
+                typer.echo(f"    - {note}")
+
+
+@cli.command("alert-preview")
+def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ scores that would be blocked")) -> None:
+    """Read-only: which active listings would alert on a fresh day (no cooldowns yet)? Writes nothing."""
+    from app.api.routes.deals import latest_evaluations_query
+    from app.db.models import DealEvaluation, Listing
+    from app.scoring.engine import score_listing
+    from app.scoring.policy import AlertState, PreviousAlert, decide
+    from app.services.evaluation import build_context
+
+    cfg = get_user_config()
+    with session_scope() as s:
+        rows = s.execute(latest_evaluations_query().where(
+            Listing.status == "active", DealEvaluation.recommendation.in_(["GOOD", "STRONG_BUY", "STEAL"]))
+            .order_by(DealEvaluation.total_score.desc())).all()
+        sent: dict[tuple, PreviousAlert] = {}
+        capped = 0
+        typer.echo(f"{len(rows)} active listings score GOOD or better. Simulating a fresh day "
+                   f"(cap {cfg.alerts.max_alerts_per_day}/day, STEAL exempt):\n")
+        for listing, _ev in rows:
+            ctx = build_context(s, listing, cfg)
+            result = score_listing(ctx, cfg)
+            key = (listing.matched_card_id, listing.matched_product_id)
+            d = decide(ctx, result, AlertState(previous_entity=sent.get(key), alerts_today=capped, now=utcnow()), cfg)
+            fv = ctx.fair_value.fair_value_nok if ctx.fair_value else 0
+            line = (f"{result.total_score:5.1f} {listing.title[:40]:40} {listing.source:10} "
+                    f"{listing.total_price_nok:6.0f} NOK  fv {fv or 0:6.0f}  {(result.discount_pct or 0):6.1%}")
+            if d.notify:
+                sent[key] = PreviousAlert(utcnow(), listing.total_price_nok)
+                capped += d.severity != "STEAL"
+                typer.echo(f"ALERT {d.severity:10} {line}")
+                for w in result.warnings[:2]:
+                    typer.echo(f"      ! {w}")
+            elif show_blocked:
+                typer.echo(f"  --  {d.severity or '':10} {line}\n      blocked: {'; '.join(d.blocked_by)}")
+
+
+@cli.command("purge-mock-data")
+def purge_mock_data_cmd(yes: bool = typer.Option(False, "--yes", help="Skip confirmation")) -> None:
+    """Remove mock CardTrader cards/listings/prices; move your watchlist/portfolio to the live cards."""
+    from app.services.data_hygiene import purge_mock_data
+
+    if not yes:
+        typer.confirm("Delete all mock CardTrader data (user data is re-pointed to live cards)?", abort=True)
+    with session_scope() as s:
+        _echo_json(purge_mock_data(s))
+
+
+@cli.command("reset-price-history")
+def reset_price_history_cmd(yes: bool = typer.Option(False, "--yes", help="Skip confirmation")) -> None:
+    """Delete price snapshots, daily aggregates and un-alerted evaluations (after a pricing-model change)."""
+    from app.services.data_hygiene import reset_price_history
+
+    if not yes:
+        typer.confirm("Delete ALL price history? It is rebuilt from the next scans.", abort=True)
+    with session_scope() as s:
+        _echo_json(reset_price_history(s))
 
 
 @cli.command("source-health")
