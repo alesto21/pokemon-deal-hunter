@@ -94,7 +94,7 @@ Prices always come from the per-expansion marketplace request. CardTrader's per-
 returns the same listings in another display currency, with a ~13% cross-currency markup (see
 docs/SOURCES.md).
 
-## Fair value (`pricing/fair_value.py`, model `executable-v3`)
+## Fair value (`pricing/fair_value.py`)
 
 Fair value is what you can realistically **buy** for, not the average ask. Stale, overpriced
 asks commonly sit 30–60% above the buyable market.
@@ -133,15 +133,45 @@ high-priority watch +3, premium value +3.
 
 Bands: 0–59 IGNORE, 60–74 WATCH, 75–84 GOOD, 85–92 STRONG BUY, 93–100 STEAL.
 
+## Landed cost and seller regions (`pricing/landed_cost.py`)
+
+Every listing stores `seller_country`, `seller_region`, item price, shipping, import buffer and
+`landed_cost_nok = item + shipping + import buffer`.
+
+* Region from the seller's ISO country (`region_countries` in `config/sources.yaml`): EEA, UK,
+  Switzerland, US, Canada. Unknown or unlisted countries are "other".
+* Shipping: `shipping_nok_by_region` for CardTrader (EEA 80, UK/CH 140, US/CA 250, other 300 NOK).
+  FINN and web shops are Norwegian (region EEA) and use their own shipping.
+* Import buffer: `import_buffer_by_region` (default 25% of item + 100 NOK for every non-EEA
+  region, 0 for EEA). This is a deliberately conservative *uncertainty buffer*, not a tax
+  calculation.
+* **Discount, score and recommendation use the landed cost.** Fair value still uses item prices
+  of valid listings from **all** regions.
+* The "too good to be true" guard (`suspicious_discount`) compares the **item** price with fair
+  value, because shipping dilutes the discount of cheap cards and would hide a suspicious listing.
+* Alerts only for sellers in `deal_seller_regions` (default `[EEA]`). Other listings are still
+  stored, priced and scored, but blocked with `seller_region_not_allowed`.
+
 ## Notification policy (`scoring/policy.py`)
 
-The alert severity is the lower of two levels: the score band, and the level the raw discount
-supports (15/22/30%). A STEAL score with an 18% discount therefore alerts as GOOD. A discount
-deeper than 45% (`suspicious_discount`) is capped at STRONG BUY with a "verify listing" warning:
-in live data these were stale or mispriced listings, so they must not bypass the daily cap as
-STEALs. Cooldowns apply per listing **and per card**, so two sellers at the same price produce
-one alert. Only alerts from the current mode count: dry-run history never suppresses live alerts. Hard filters:
-fair value ≥ 250 NOK (unless the item is on the high-priority watchlist), match confidence ≥ 0.90,
+`effective_level()` turns the raw score band into the **effective level**: the lower of the score
+band and the level the landed-cost discount supports (15/22/30%). A STEAL score with an 18%
+discount is therefore GOOD. The effective level is stored on every evaluation (`alert_level`, with
+the cap reasons in `reason_json.effective`) whether or not alerts are enabled. It drives the
+dashboard badge, the recommendation filter and the overview counts, and it *is* the Telegram
+severity, because `decide()` uses the same function. `decide()` only adds the stateful part: hard
+filters, cooldowns and the daily cap decide *whether* to notify, never the level.
+
+An item priced more than 45% below fair value (`suspicious_discount`, measured on the item price)
+is capped at STRONG BUY with a "verify listing" warning. In live data such listings were stale or
+mispriced, so they must not bypass the daily cap as STEALs.
+
+Listings from sellers outside `deal_seller_regions` never alert (`seller_region_not_allowed`).
+Cooldowns apply per listing **and per card**, so two sellers at the same price produce one alert.
+Only alerts from the current mode count: dry-run history never suppresses live alerts.
+
+Hard filters:
+seller region allowed, fair value ≥ 250 NOK (unless the item is on the high-priority watchlist), match confidence ≥ 0.90,
 fair-value confidence ≥ 0.5, no damaged/played condition, not an ignored Pokémon, no duplicate
 unless the discount is > 35%, seller confidence ≥ 0.3. GOOD also needs a special rule (watchlist
 target met / high-priority missing / premium fit). No re-alert for the same listing unless 24 h

@@ -37,8 +37,11 @@
   They rarely sit in the cheapest 5 for EU-available cards.
 * Valid-listing filters and exclusion reasons: see ARCHITECTURE.md → "Which listings count", or run
   `python -m app.cli cardtrader-debug-card --set-code TEF --card-number 177`.
-* Shipping from CardTrader sellers varies by seller and country. We add a flat configurable
-  estimate (`estimated_shipping_nok`, default 60 NOK).
+* Shipping and import costs are estimated **by seller region** (`shipping_nok_by_region`,
+  `import_buffer_by_region` in `config/sources.yaml`). The seller country comes from CardTrader's
+  `user.country_code`. Alerts use the landed cost and are limited to `deal_seller_regions`
+  (default EEA). All regions still count toward fair value. Import buffers are uncertainty
+  allowances, not tax calculations.
 
 ## FINN.no
 

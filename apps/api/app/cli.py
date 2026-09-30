@@ -60,9 +60,16 @@ def _print_eval(listing, ev, result, decision) -> None:
     typer.echo(f"\n#{listing.id} [{listing.source}] {listing.title}")
     typer.echo(f"  match: {listing.match_status} ({listing.confidence:.2f}) → "
                f"card={listing.matched_card_id} product={listing.matched_product_id}")
-    typer.echo(f"  total: {listing.total_price_nok:.0f} NOK | fair value: {ev.fair_value_nok or 0:.0f} NOK "
+    typer.echo(f"  seller: {listing.seller_country or '?'} ({listing.seller_region or '?'}) | item "
+               f"{listing.normalized_price_nok:.0f} + shipping {listing.shipping_price_nok:.0f} + import buffer "
+               f"{listing.import_buffer_nok or 0:.0f} = landed {listing.scoring_price_nok:.0f} NOK")
+    typer.echo(f"  landed: {listing.scoring_price_nok:.0f} NOK | fair value: {ev.fair_value_nok or 0:.0f} NOK "
                f"(conf {ev.fair_value_confidence or 0:.2f}) | discount: {(ev.discount_pct or 0):.1%}")
-    typer.echo(f"  score: {ev.total_score:.1f} → {ev.recommendation} | binder fit: {ev.binder_fit}")
+    caps = (ev.reason_json.get("effective") or {}).get("caps", [])
+    typer.echo(f"  score: {ev.total_score:.1f} (band {ev.recommendation}) → level {ev.alert_level}"
+               f" | binder fit: {ev.binder_fit}")
+    for cap in caps:
+        typer.echo(f"   ↓ {cap}")
     for r in result.reasons:
         typer.echo(f"   + {r}")
     for w in result.warnings:
@@ -261,23 +268,32 @@ def cardtrader_check(set_code: str = typer.Option("TEF", help="Set code from con
                        f"{_eur(fv.fair_value_nok, eur)} {fv.confidence:5.2f}  {','.join(fv.flags)}")
 
 
-def _print_listing_rows(verdicts, fx) -> None:
-    typer.echo(f"{'listing':>10} {'seller':20} {'cc':2} {'lang':4} {'condition':17} {'qty':>3} "
-               f"{'price':>8} {'cur':3} {'NOK':>8}  {'used':9} reason")
+def _print_listing_rows(verdicts, fx, fair_value_nok: float | None) -> None:
+    """One line per listing: pricing verdict plus landed cost and deal eligibility (seller region)."""
+    from app.pricing.landed_cost import estimate_landed_cost, region_allowed_for_deals
+
+    sources = get_user_config().sources
+    typer.echo(f"{'listing':>10} {'seller':16} {'cc':2} {'region':11} {'lang':4} {'condition':13} "
+               f"{'price':>8} {'cur':3} {'item':>6} {'ship':>4} {'imp':>4} {'landed':>6} {'disc':>6}  "
+               f"{'fair-value use':15} {'deal region':11} reason")
     rank = 0
     for v in verdicts:
         p = v.product
         props, user = p.get("properties_hash") or {}, p.get("user") or {}
-        nok = fx.to_nok(v.price_cents / 100, p["price"]["currency"])
+        cost = estimate_landed_cost(fx.to_nok(v.price_cents / 100, p["price"]["currency"]),
+                                    user.get("country_code"), sources)
+        disc = (f"{(fair_value_nok - cost.landed_cost_nok) / fair_value_nok:6.1%}" if fair_value_nok
+                else "     -")
         tag = "no"
         if v.included:
             rank += 1
             tag = f"YES #{rank}" + (" c5" if rank <= 5 else " c10" if rank <= 10 else "")
-        seller = str(user.get("username", ""))[:20]
-        typer.echo(f"{p['id']:>10} {seller:20} {user.get('country_code') or '':2} "
-                   f"{str(props.get('pokemon_language')):4} {str(props.get('condition')):17} "
-                   f"{p.get('quantity', ''):>3} {v.price_cents / 100:8.2f} {p['price']['currency']:3} "
-                   f"{nok:8.0f}  {tag:9} {v.reason or ''}")
+        deal_ok = "ok" if region_allowed_for_deals(cost.seller_region, sources) else "blocked"
+        typer.echo(f"{p['id']:>10} {str(user.get('username', ''))[:16]:16} {cost.seller_country or '??':2} "
+                   f"{cost.seller_region:11} {str(props.get('pokemon_language')):4} "
+                   f"{str(props.get('condition'))[:13]:13} {v.price_cents / 100:8.2f} {p['price']['currency']:3} "
+                   f"{cost.item_price_nok:6.0f} {cost.shipping_nok:4.0f} {cost.import_buffer_nok:4.0f} "
+                   f"{cost.landed_cost_nok:6.0f} {disc}  {tag:15} {deal_ok:11} {v.reason or ''}")
 
 
 @cli.command("cardtrader-debug-card")
@@ -324,8 +340,9 @@ def cardtrader_debug_card(
                        f"graded={'excluded' if ct.exclude_graded else 'allowed'} "
                        f"reverse={'excluded' if ct.exclude_reverse_holo else 'allowed'} "
                        f"one-per-seller={ct.one_listing_per_seller}")
+            fv, hist = _live_fair_value(s, entity, st)
             if rows:
-                _print_listing_rows(verdicts, fx)
+                _print_listing_rows(verdicts, fx, fv.fair_value_nok)
             excluded: dict[str, int] = {}
             for v in verdicts:
                 if not v.included:
@@ -333,7 +350,8 @@ def cardtrader_debug_card(
                         else v.reason or "?"
                     excluded[key] = excluded.get(key, 0) + 1
             typer.echo(f"\nlistings: {len(verdicts)} fetched, {st.count} valid, excluded: {excluded or 'none'}")
-            fv, hist = _live_fair_value(s, entity, st)
+            typer.echo(f"fair value uses valid listings from ALL regions; alerts only for "
+                       f"{get_user_config().sources.deal_seller_regions}; disc = vs fair value on landed cost")
             def line(name: str, v: float | None) -> None:
                 typer.echo(f"  {name:22} {('-' if v is None else f'{v:8.0f} NOK'):>12}   {_eur(v, eur)} EUR")
             line("market_low", st.low)
@@ -360,7 +378,7 @@ def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ 
     from app.api.routes.deals import latest_evaluations_query
     from app.db.models import DealEvaluation, Listing
     from app.scoring.engine import score_listing
-    from app.scoring.policy import AlertState, PreviousAlert, decide
+    from app.scoring.policy import AlertState, PreviousAlert, decide, effective_level
     from app.services.evaluation import build_context
 
     cfg = get_user_config()
@@ -377,17 +395,24 @@ def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ 
             result = score_listing(ctx, cfg)
             key = (listing.matched_card_id, listing.matched_product_id)
             d = decide(ctx, result, AlertState(previous_entity=sent.get(key), alerts_today=capped, now=utcnow()), cfg)
+            eff = effective_level(result, cfg)
             fv = ctx.fair_value.fair_value_nok if ctx.fair_value else 0
-            line = (f"{result.total_score:5.1f} {listing.title[:40]:40} {listing.source:10} "
-                    f"{listing.total_price_nok:6.0f} NOK  fv {fv or 0:6.0f}  {(result.discount_pct or 0):6.1%}")
+            where = f"{listing.seller_country or '?'}/{listing.seller_region or '?'}"
+            head = (f"{listing.title[:34]:34} {listing.source:10} {where:9} "
+                    f"score {result.total_score:5.1f} (band {eff.raw_band})")
+            costs = (f"item {listing.normalized_price_nok:.0f} + ship {listing.shipping_price_nok:.0f} + import "
+                     f"{listing.import_buffer_nok or 0:.0f} = landed {listing.scoring_price_nok:.0f} NOK · "
+                     f"fair value {fv or 0:.0f} · discount {(result.discount_pct or 0):.1%}")
             if d.notify:
-                sent[key] = PreviousAlert(utcnow(), listing.total_price_nok)
+                sent[key] = PreviousAlert(utcnow(), listing.scoring_price_nok)
                 capped += d.severity != "STEAL"
-                typer.echo(f"ALERT {d.severity:10} {line}")
-                for w in result.warnings[:2]:
-                    typer.echo(f"      ! {w}")
+                typer.echo(f"ALERT {d.severity:10} {head}\n      {costs}")
             elif show_blocked:
-                typer.echo(f"  --  {d.severity or '':10} {line}\n      blocked: {'; '.join(d.blocked_by)}")
+                typer.echo(f"  --  {eff.level:10} {head}\n      {costs}\n      blocked: {'; '.join(d.blocked_by)}")
+            else:
+                continue
+            for cap in eff.caps:
+                typer.echo(f"      ↓ {cap}")
 
 
 @cli.command("purge-mock-data")
@@ -447,7 +472,7 @@ def import_listings(path: Path) -> None:
                 listing = ingest_url(s, r["url"], r["title"], r["price"], r["currency"], r["shipping_nok"],
                                      r["condition"], r["description"])
                 ev, *_ = evaluate_listing(s, listing)
-                typer.echo(f"ok   #{listing.id} {listing.title[:50]} → {ev.total_score:.0f} {ev.recommendation}")
+                typer.echo(f"ok   #{listing.id} {listing.title[:50]} → {ev.total_score:.0f} {ev.alert_level}")
         except Exception as exc:
             typer.echo(f"fail {r['url']}: {exc}")
 

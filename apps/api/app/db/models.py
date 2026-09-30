@@ -129,8 +129,17 @@ class Listing(Base):
     currency: Mapped[str] = mapped_column(String(3), default="NOK")
     normalized_price_nok: Mapped[float] = mapped_column(Float)
     shipping_price_nok: Mapped[float] = mapped_column(Float, default=0)
-    total_price_nok: Mapped[float] = mapped_column(Float, index=True)
+    total_price_nok: Mapped[float] = mapped_column(Float, index=True)            # item + shipping
     previous_total_price_nok: Mapped[float | None] = mapped_column(Float)
+    seller_country: Mapped[str | None] = mapped_column(String(2))
+    seller_region: Mapped[str | None] = mapped_column(String(16), index=True)
+    import_buffer_nok: Mapped[float] = mapped_column(Float, default=0)
+    # item + shipping + import buffer: the price used for discount, score and alerts
+    landed_cost_nok: Mapped[float | None] = mapped_column(Float, index=True)
+
+    @property
+    def scoring_price_nok(self) -> float:
+        return self.landed_cost_nok if self.landed_cost_nok is not None else self.total_price_nok
     image_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
@@ -256,7 +265,9 @@ class DealEvaluation(Base):
     portfolio_score: Mapped[float] = mapped_column(Float, default=0)
     seller_confidence_score: Mapped[float] = mapped_column(Float, default=0)
     total_score: Mapped[float] = mapped_column(Float, index=True)
-    recommendation: Mapped[str] = mapped_column(String(16), index=True)
+    recommendation: Mapped[str] = mapped_column(String(16), index=True)      # raw score band
+    # Effective level after the discount cap and suspicious-price guard (what the badge shows).
+    alert_level: Mapped[str | None] = mapped_column(String(16), index=True)
     binder_fit: Mapped[str | None] = mapped_column(String(16))
     reason_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 

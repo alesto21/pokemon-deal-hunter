@@ -31,6 +31,7 @@ def list_deals(
     min_score: float = 0,
     recommendation: list[str] | None = Query(default=None),
     binder_fit: str | None = None,
+    seller_region: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
     q: str | None = None,
@@ -38,19 +39,23 @@ def list_deals(
     limit: int = Query(default=100, le=500),
     offset: int = 0,
 ) -> dict:
+    level = func.coalesce(DealEvaluation.alert_level, DealEvaluation.recommendation)
     query = latest_evaluations_query().where(DealEvaluation.total_score >= min_score)
     if status != "all":
         query = query.where(Listing.status == status)
     if source:
         query = query.where(Listing.source == source)
-    if recommendation:
-        query = query.where(DealEvaluation.recommendation.in_(recommendation))
+    if recommendation:  # filters on the effective level (after caps), like the badge
+        query = query.where(level.in_(recommendation))
     if binder_fit:
         query = query.where(DealEvaluation.binder_fit == binder_fit)
+    landed = func.coalesce(Listing.landed_cost_nok, Listing.total_price_nok)
     if min_price is not None:
-        query = query.where(Listing.total_price_nok >= min_price)
+        query = query.where(landed >= min_price)
     if max_price is not None:
-        query = query.where(Listing.total_price_nok <= max_price)
+        query = query.where(landed <= max_price)
+    if seller_region:
+        query = query.where(Listing.seller_region == seller_region)
     if q:
         query = query.where(Listing.title.ilike(f"%{q[:100]}%"))
     total = db.scalar(select(func.count()).select_from(query.subquery()))
@@ -62,16 +67,16 @@ def list_deals(
 def overview(db: Session = Depends(get_db)) -> dict:
     start = datetime.combine(utcnow().date(), datetime.min.time())
     runs = db.scalars(select(CollectorRun).where(CollectorRun.started_at >= start)).all()
+    good = ["GOOD", "STRONG_BUY", "STEAL"]
+    level = func.coalesce(DealEvaluation.alert_level, DealEvaluation.recommendation)
     deals_today = db.scalar(select(func.count(func.distinct(DealEvaluation.listing_id))).where(
-        DealEvaluation.timestamp >= start,
-        DealEvaluation.recommendation.in_(["GOOD", "STRONG_BUY", "STEAL"]))) or 0
+        DealEvaluation.timestamp >= start, level.in_(good))) or 0
     alerts_today = db.scalar(select(func.count(Alert.id)).where(Alert.sent_at >= start, Alert.kind == "deal")) or 0
     sources = [{"source": s.source, "healthy": s.consecutive_failures == 0, "last_success": s.last_success,
                 "last_failure": s.last_failure} for s in db.scalars(select(SourceStatus)).all()]
     summary = portfolio_summary(db, value_holdings(db, lambda t, i: fair_value_nok(db, t, i)))
-    good = ["GOOD", "STRONG_BUY", "STEAL"]
     top = db.execute(latest_evaluations_query()
-                     .where(Listing.status == "active", DealEvaluation.recommendation.in_(good))
+                     .where(Listing.status == "active", level.in_(good))
                      .order_by(DealEvaluation.total_score.desc()).limit(5)).all()
     return {
         "scans_today": len(runs),

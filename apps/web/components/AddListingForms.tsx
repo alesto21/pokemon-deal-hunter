@@ -52,7 +52,7 @@ export function AddFinnListing({ onDone }: { onDone: () => void }) {
       {result && (
         <div className="rounded-md border border-zinc-200 p-2 text-sm dark:border-zinc-800">
           Added <b>{result.entity_label ?? result.title}</b> — {nok(result.total_price_nok)} · score {num(result.evaluation?.total_score)}{" "}
-          <RecBadge rec={result.evaluation?.recommendation} /> · match {result.match_status}
+          <RecBadge rec={result.evaluation?.alert_level} /> · match {result.match_status}
         </div>
       )}
     </form>

@@ -46,7 +46,10 @@ export interface Evaluation {
   fair_value_confidence: number | null;
   discount_pct: number | null;
   total_score: number;
-  recommendation: Recommendation;
+  recommendation: Recommendation; // raw score band
+  raw_band: Recommendation;
+  alert_level: Recommendation; // effective level after caps — what the badge shows
+  caps: string[];
   binder_fit: string | null;
   scores: {
     liquidity: number;
@@ -94,6 +97,10 @@ export interface Listing {
   normalized_price_nok: number;
   shipping_price_nok: number;
   total_price_nok: number;
+  seller_country: string | null;
+  seller_region: string | null;
+  import_buffer_nok: number;
+  landed_cost_nok: number;
   first_seen: string;
   last_seen: string;
   status: string;

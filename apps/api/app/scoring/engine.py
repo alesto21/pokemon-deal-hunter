@@ -21,7 +21,7 @@ from app.scoring.context import EvaluationContext
 class ScoreResult:
     total_score: float
     recommendation: str
-    discount_pct: float | None
+    discount_pct: float | None                # landed cost vs fair value (drives score + alerts)
     components: dict[str, float]              # 0..1 per component
     weighted: dict[str, float]                # points per component
     modifiers: dict[str, float]               # points added/subtracted
@@ -32,6 +32,7 @@ class ScoreResult:
     warnings: list[str] = field(default_factory=list)
     grading: GradingEconomics | None = None
     sealed: SealedAnalysis | None = None
+    item_discount_pct: float | None = None    # item price alone vs fair value (sanity checks only)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class ScoreResult:
             "reasons": self.reasons,
             "warnings": self.warnings,
             "binder_fit": self.binder_fit,
+            "item_discount_pct": self.item_discount_pct,
             "grading": self.grading.__dict__ if self.grading else None,
             "sealed": self.sealed.__dict__ if self.sealed else None,
         }
@@ -104,7 +106,11 @@ def score_listing(ctx: EvaluationContext, cfg: UserConfig) -> ScoreResult:
     if not fair:
         return ScoreResult(0, Recommendation.IGNORE, None, {}, {}, {}, 0, 0, "none",
                            [], ["no fair value available — cannot score"])
-    discount = (fair - ctx.total_price_nok) / fair
+    discount = (fair - ctx.total_price_nok) / fair  # total_price_nok = landed cost
+    item_price = ctx.listing_price_nok if ctx.listing_price_nok is not None else ctx.total_price_nok
+    # "Too good to be true" is judged on the item price: shipping/import dilute the discount of
+    # cheap cards and would hide a suspicious listing.
+    item_discount = (fair - item_price) / fair
 
     # --- components (0..1)
     comps["discount_to_fair_value"] = interpolate(sc.discount_curve, discount) * (0.5 + 0.5 * fv.confidence)
@@ -182,9 +188,9 @@ def score_listing(ctx: EvaluationContext, cfg: UserConfig) -> ScoreResult:
     total = round(max(0.0, min(100.0, base + sum(mods.values()))), 1)
     rec = recommendation_for(total, sc.bands)
 
-    if discount >= cfg.alerts.suspicious_discount:
-        warnings.insert(0, f"unusually cheap ({discount:.0%} below fair value) — verify listing, condition "
-                           "and authenticity before buying")
+    if item_discount >= cfg.alerts.suspicious_discount:
+        warnings.insert(0, f"unusually cheap (item price {item_discount:.0%} below fair value) — verify "
+                           "listing, condition and authenticity before buying")
     if discount > 0.02:
         reasons.append(f"price {discount:.0%} below fair value")
     elif discount < -0.02:
@@ -203,4 +209,4 @@ def score_listing(ctx: EvaluationContext, cfg: UserConfig) -> ScoreResult:
         reasons.append("on your premium target list")
 
     return ScoreResult(total, rec, round(discount, 4), comps, weighted, mods, seller_conf, pm.points, fit,
-                       reasons, warnings, grading, sealed)
+                       reasons, warnings, grading, sealed, round(item_discount, 4))

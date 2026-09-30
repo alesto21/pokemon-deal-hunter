@@ -30,10 +30,13 @@ def format_deal_alert(ctx: EvaluationContext, result: ScoreResult, severity: str
     lines.append(f"<b>{e(title)}</b>")
     if ctx.set_name:
         lines.append(e(ctx.set_name))
-    lines += ["", f"Source: {e(source_label)}",
+    seller = f" ({e(ctx.seller_country)}, {e(ctx.seller_region)})" if ctx.seller_country else ""
+    lines += ["", f"Source: {e(source_label)}{seller}",
               f"Price: {nok(ctx.listing_price_nok if ctx.listing_price_nok is not None else ctx.total_price_nok)}",
-              f"Shipping: {nok(ctx.shipping_nok)}",
-              f"Total: {nok(ctx.total_price_nok)}"]
+              f"Shipping (est.): {nok(ctx.shipping_nok)}"]
+    if ctx.import_buffer_nok:
+        lines.append(f"Import buffer (est.): {nok(ctx.import_buffer_nok)}")
+    lines.append(f"Landed cost: {nok(ctx.total_price_nok)}")
     lines += ["", f"Fair value: {nok(fv.fair_value_nok if fv else None)}"
               f" ({nok(fv.fair_value_low if fv else None)}–{nok(fv.fair_value_high if fv else None)})",
               f"Discount: {result.discount_pct:.1%}" if result.discount_pct is not None else "Discount: —"]

@@ -1,4 +1,44 @@
 # Source configuration and schedules (minutes). Secrets live in .env, never here.
+
+# ---------------------------------------------------------------- landed cost & seller regions
+# Scores, discounts and alerts use the estimated LANDED cost:
+#   landed = item price + shipping (by seller region) + import buffer (by seller region)
+# Fair value always uses item prices from ALL regions (more data, and the buyable market is
+# mostly EEA anyway). Only alerts are restricted to deal_seller_regions.
+deal_seller_regions:
+  - EEA
+
+# Seller country (ISO-2, as reported by the source) → region. Unlisted/unknown → "other".
+region_countries:
+  # Codes are quoted on purpose: in YAML an unquoted NO means false ("the Norway problem").
+  EEA: ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT",
+        "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "NO", "IS", "LI"]
+  UK: ["GB"]
+  Switzerland: ["CH"]
+  US: ["US"]
+  Canada: ["CA"]
+
+# Estimated shipping to Norway per listing (NOK). Used for CardTrader. FINN and web shops use
+# their own shipping (given per listing, or the source default below).
+shipping_nok_by_region:
+  EEA: 80
+  UK: 140
+  Switzerland: 140
+  US: 250
+  Canada: 250
+  other: 300
+
+# Import VAT / duty / carrier-handling UNCERTAINTY BUFFER (not a tax calculation).
+# buffer = pct_of_item x item price + fixed_nok. EEA: no buffer beyond shipping (v1 assumption).
+# Kept deliberately conservative; adjust once you know your real costs.
+import_buffer_by_region:
+  UK:          {pct_of_item: 0.25, fixed_nok: 100}
+  Switzerland: {pct_of_item: 0.25, fixed_nok: 100}
+  US:          {pct_of_item: 0.25, fixed_nok: 100}
+  Canada:      {pct_of_item: 0.25, fixed_nok: 100}
+  other:       {pct_of_item: 0.25, fixed_nok: 100}
+
+# ---------------------------------------------------------------- sources
 cardtrader:
   enabled: true
   interval_minutes: 30
@@ -8,7 +48,6 @@ cardtrader:
   exclude_graded: true            # graded flag AND "PSA/BGS/CGC/graded" in the description
   exclude_reverse_holo: true      # reverse holos share the blueprint but are a different product
   one_listing_per_seller: true    # a seller's extra copies never fill the cheapest-N window
-  estimated_shipping_nok: 60      # added to CardTrader listing totals
   track_sets_from_config: true    # sets with cardtrader_track: true in sets.yaml
   extra_expansion_codes: []       # additional CardTrader expansion codes to scan
   evaluate_cheapest_n: 3          # evaluate the N cheapest listings per item as deals

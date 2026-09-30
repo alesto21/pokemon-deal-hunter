@@ -6,6 +6,36 @@ import { nok, num, pct } from "@/lib/format";
 import type { Listing } from "@/lib/types";
 import { Empty, RecBadge, btn, td, th } from "./ui";
 
+function CostBreakdown({ l }: { l: Listing }) {
+  const rows: [string, number][] = [
+    [`Item (${l.asking_price.toFixed(2)} ${l.currency})`, l.normalized_price_nok],
+    ["Shipping (est.)", l.shipping_price_nok],
+    ["Import buffer (est.)", l.import_buffer_nok],
+  ];
+  return (
+    <div className="mb-3">
+      <div className="mb-1 font-semibold">Landed cost</div>
+      <table className="w-full text-xs">
+        <tbody>
+          {rows.map(([k, v]) => (
+            <tr key={k}>
+              <td className="py-0.5 pr-2 text-zinc-500">{k}</td>
+              <td className="py-0.5 text-right tabular-nums">{nok(v)}</td>
+            </tr>
+          ))}
+          <tr className="border-t border-zinc-200 font-semibold dark:border-zinc-700">
+            <td className="py-0.5 pr-2">Landed</td>
+            <td className="py-0.5 text-right tabular-nums">{nok(l.landed_cost_nok)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-1 text-xs text-zinc-500">
+        Seller {l.seller_country ?? "unknown country"} · region {l.seller_region ?? "?"}. Estimates, not exact tax.
+      </div>
+    </div>
+  );
+}
+
 function DealDetail({ l }: { l: Listing }) {
   const ev = l.evaluation;
   if (!ev) return <div className="text-sm text-zinc-500">Not evaluated yet.</div>;
@@ -42,6 +72,19 @@ function DealDetail({ l }: { l: Listing }) {
         </div>
       </div>
       <div>
+        <CostBreakdown l={l} />
+        <div className="mb-1 font-semibold">Recommendation</div>
+        <div className="mb-3 text-xs">
+          <div>
+            Score {num(ev.total_score, 1)} → band <b>{ev.raw_band.replace("_", " ")}</b> → effective{" "}
+            <b>{ev.alert_level.replace("_", " ")}</b>
+          </div>
+          {ev.caps.length > 0 ? (
+            <ul className="mt-1 list-disc pl-5 text-amber-700 dark:text-amber-400">{ev.caps.map((c) => <li key={c}>{c}</li>)}</ul>
+          ) : (
+            <div className="mt-1 text-zinc-500">No caps applied.</div>
+          )}
+        </div>
         <div className="mb-1 font-semibold">Notification</div>
         {ev.notification ? (
           <div className="text-xs">
@@ -73,12 +116,12 @@ export default function DealsTable({ items, compact = false }: { items: Listing[
           <tr>
             <th className={th}>Listing</th>
             <th className={th}>Source</th>
-            <th className={`${th} text-right`}>Total</th>
+            <th className={`${th} text-right`}>Landed</th>
             <th className={`${th} text-right`}>Fair value</th>
             <th className={`${th} text-right`}>Discount</th>
             {!compact && <th className={`${th} text-right`}>30d trend</th>}
             <th className={`${th} text-right`}>Score</th>
-            <th className={th}>Rec.</th>
+            <th className={th} title="Effective level after the discount cap and suspicious-price guard">Level</th>
             <th className={th}></th>
           </tr>
         </thead>
@@ -100,14 +143,33 @@ export default function DealsTable({ items, compact = false }: { items: Listing[
                       {ev?.binder_fit && ev.binder_fit !== "none" ? ` · binder: ${ev.binder_fit}` : ""}
                     </div>
                   </td>
-                  <td className={td}>{l.source}</td>
-                  <td className={`${td} text-right tabular-nums`}>{nok(l.total_price_nok)}</td>
-                  <td className={`${td} text-right tabular-nums`}>{nok(ev?.fair_value_nok)}</td>
+                  <td className={td}>
+                    <div>{l.source}</div>
+                    <div className="text-xs text-zinc-500">
+                      {l.seller_country ?? "??"} · {l.seller_region ?? "?"}
+                      {ev?.notification?.blocked_by.some((b) => b.startsWith("seller_region_not_allowed")) && (
+                        <span className="ml-1 rounded bg-zinc-200 px-1 text-[10px] uppercase dark:bg-zinc-800">no alert</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className={`${td} text-right tabular-nums`}>
+                    <div className="whitespace-nowrap font-medium">{nok(l.landed_cost_nok)}</div>
+                    <div className="text-xs text-zinc-500">
+                      {nok(l.normalized_price_nok)} + {nok(l.shipping_price_nok)}
+                      {l.import_buffer_nok > 0 ? ` + ${nok(l.import_buffer_nok)}` : ""}
+                    </div>
+                  </td>
+                  <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{nok(ev?.fair_value_nok)}</td>
                   <td className={`${td} text-right tabular-nums`}>{pct(ev?.discount_pct)}</td>
                   {!compact && <td className={`${td} text-right tabular-nums`}>{pct(ev?.trend_30d, 1, true)}</td>}
-                  <td className={`${td} text-right font-semibold tabular-nums`}>{num(ev?.total_score)}</td>
+                  <td className={`${td} text-right font-semibold tabular-nums`}>{num(ev?.total_score, 1)}</td>
                   <td className={td}>
-                    <RecBadge rec={ev?.recommendation} />
+                    <RecBadge rec={ev?.alert_level} />
+                    {ev && ev.raw_band !== ev.alert_level && (
+                      <div className="mt-0.5 text-[10px] text-zinc-500" title={ev.caps.join("\n")}>
+                        capped · band {ev.raw_band.replace("_", " ")}
+                      </div>
+                    )}
                   </td>
                   <td className={`${td} whitespace-nowrap text-right`} onClick={(e) => e.stopPropagation()}>
                     {l.url && (

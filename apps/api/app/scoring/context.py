@@ -15,9 +15,14 @@ class EvaluationContext:
     # listing
     source: str
     title: str
+    # All-in price used for discount/score/alerts = estimated landed cost
+    # (item + shipping + import buffer). Component parts are kept for display.
     total_price_nok: float
     listing_price_nok: float | None = None
     shipping_nok: float = 0.0
+    import_buffer_nok: float = 0.0
+    seller_country: str | None = None
+    seller_region: str | None = None
     listing_kind: str = "single"          # single|sealed|lot|graded
     condition: str | None = None
     description: str | None = None

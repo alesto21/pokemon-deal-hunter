@@ -1,5 +1,49 @@
 # Development log
 
+## 2026-10-01 — Seller regions and landed cost (model `executable-v6-landed`)
+
+### Changes
+- `pricing/landed_cost.py`: seller country → region (EEA / UK / Switzerland / US / Canada / other),
+  `landed = item + shipping by region + import buffer by region`. The flat 60 NOK CardTrader
+  shipping estimate is replaced by `shipping_nok_by_region` (EEA 80, UK/CH 140, US/CA 250,
+  other 300). The import buffer is 25% of item + 100 NOK for non-EEA, 0 for EEA. It is an
+  uncertainty buffer, not a tax calculation.
+- Discount, score and recommendation use the landed cost. Fair value keeps valid listings from
+  all regions.
+- Alerts only for `deal_seller_regions` (default `[EEA]`). Others are blocked with
+  `seller_region_not_allowed`, but still stored, priced and scored.
+- Effective level: the dashboard badge shows the level after the discount cap and the
+  suspicious-price guard (`policy.effective_level`, stored as `deal_evaluations.alert_level` with the
+  cap reasons), not the raw score band. The raw score and band stay visible, and the expanded row
+  shows band → level → caps. Telegram severity already used this logic; it now calls the same
+  function, so badge and alert cannot diverge. The recommendation filter and overview counts use
+  the effective level.
+- Migration `0003`: listings get `seller_country`, `seller_region`, `import_buffer_nok`,
+  `landed_cost_nok`; deal evaluations get `alert_level`. FINN and web shops are Norwegian sellers (EEA) with their own shipping.
+- The suspicious-discount guard now compares the **item** price with fair value. With the higher
+  EEA shipping estimate, the stale 13 EUR Mew ex listing's landed discount fell to 41%, which
+  silently lifted the cap. Its item price is 62% under fair value.
+- CLI: `cardtrader-debug-card` shows region, item/shipping/import/landed cost, discount and deal
+  eligibility per listing. `alert-preview` and `evaluate-listing` show the cost breakdown.
+- Dashboard: seller country and region, landed cost with breakdown, region filter, landed-cost
+  price filters, and a cost breakdown in the expanded row.
+- YAML gotcha: unquoted `NO` (Norway) parses as `false`. Country codes are quoted, and pydantic
+  rejects the config loudly if this ever regresses.
+- Tests: 139 (effective-level caps and badge/Telegram consistency, EEA/UK/US/unknown country, outside-region block, fair value keeps all regions,
+  landed-cost discount, upsert storage, end-to-end block persisted, item-price suspicious guard).
+
+### Effect on alerts (live data, alert-preview)
+Same 3 alerts, all EEA sellers, with smaller discounts because EEA shipping is now 80 NOK
+instead of 60:
+- Mew ex 205 (BE): 144 + 80 = 224 NOK vs fair value 381 → 41.2% landed, 62% item → STRONG BUY
+  (capped) + verify warning
+- Eevee 188 (IT): 870 + 80 = 950 vs 1,179 → 19.4% → GOOD
+- Gengar ex 193 (FI): 519 + 80 = 599 vs 729 → 17.8% → GOOD
+
+Charizard ex 199 stays blocked (11.4%). Non-EEA: 270 evaluated listings, 0 GOOD+. Two non-EEA
+listings looked like 28–32% deals on sticker price (GB Perrin 220, CH 151 Booster Bundle); landed
+cost drops them to 8% / 5.5% (IGNORE).
+
 ## 2026-10-01 — Fair-value audit against live CardTrader data (model `executable-v3`)
 
 ### Audit findings (live Temporal Forces data, 81,754 English listings across 5 sets)

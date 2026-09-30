@@ -15,6 +15,7 @@ from app.db.base import utcnow
 from app.db.models import EntityType, Listing, ListingStatus, MatchStatus
 from app.matching.matcher import match_listing
 from app.pricing.fx import FxRates
+from app.pricing.landed_cost import estimate_landed_cost
 
 log = get_logger(__name__)
 
@@ -33,7 +34,8 @@ class RawListing:
     condition: str | None = None
     language: str | None = None
     quantity: int = 1
-    shipping_nok: float = 0.0
+    shipping_nok: float | None = None      # None → regional estimate from sources.yaml
+    seller_country: str | None = None      # ISO-2; None/unknown → region "other"
     is_graded: bool = False
     grade_company: str | None = None
     grade: float | None = None
@@ -60,7 +62,8 @@ class Collector(Protocol):
 def upsert_listing(session: Session, raw: RawListing, fx: FxRates) -> Listing:
     """Insert or update a listing, normalise its price to NOK and (re)match it if needed."""
     price_nok = fx.to_nok(raw.asking_price, raw.currency)
-    total = round(price_nok + (raw.shipping_nok or 0), 2)
+    cost = estimate_landed_cost(price_nok, raw.seller_country, get_user_config().sources, raw.shipping_nok)
+    total = round(price_nok + cost.shipping_nok, 2)
     listing = session.scalar(
         select(Listing).where(Listing.source == raw.source, Listing.external_id == raw.external_id)
     )
@@ -72,7 +75,7 @@ def upsert_listing(session: Session, raw: RawListing, fx: FxRates) -> Listing:
                           total_price_nok=total, image_urls=[])
         session.add(listing)
     elif abs(listing.total_price_nok - total) > 0.5:
-        listing.previous_total_price_nok = listing.total_price_nok
+        listing.previous_total_price_nok = listing.total_price_nok  # price history of item + shipping
     listing.title = sanitize_text(raw.title, 500) or listing.title
     listing.url = raw.url
     listing.description = sanitize_text(raw.description, 4000)
@@ -84,8 +87,12 @@ def upsert_listing(session: Session, raw: RawListing, fx: FxRates) -> Listing:
     listing.asking_price = raw.asking_price
     listing.currency = raw.currency.upper()
     listing.normalized_price_nok = price_nok
-    listing.shipping_price_nok = raw.shipping_nok
+    listing.shipping_price_nok = cost.shipping_nok
     listing.total_price_nok = total
+    listing.seller_country = cost.seller_country
+    listing.seller_region = cost.seller_region
+    listing.import_buffer_nok = cost.import_buffer_nok
+    listing.landed_cost_nok = cost.landed_cost_nok
     listing.is_graded = raw.is_graded
     listing.grade_company = raw.grade_company
     listing.grade = raw.grade

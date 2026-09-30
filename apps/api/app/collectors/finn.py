@@ -181,6 +181,7 @@ def ingest_url(session: Session, url: str, title: str | None = None, price: floa
         source=SOURCE, external_id=code, url=url, title=title, asking_price=float(price),
         currency=(md.currency if md and md.currency and currency == "NOK" else currency) or "NOK",
         shipping_nok=cfg.estimated_shipping_nok if shipping_nok is None else shipping_nok,
+        seller_country="NO",
         description=description or (md.description if md else None), seller=seller, condition=condition,
         image_urls=[md.image] if md and md.image else [],
     )

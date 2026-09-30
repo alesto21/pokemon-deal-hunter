@@ -73,11 +73,15 @@ def test_health_alert_sent_once_then_recovery(engine, notifier, monkeypatch):
 
 def test_alert_message_format(cfg):
     ctx = make_ctx("obvious_steal", listing_price_nok=451, shipping_nok=69, total_price_nok=520,
-                   title="<b>Gastly</b>")
+                   title="<b>Gastly</b>", seller_country="NO", seller_region="EEA")
     r = score_listing(ctx, cfg)
     text = format_deal_alert(ctx, r, "STEAL", "FINN")
     assert text.startswith("🚨 <b>STEAL")
-    assert "Source: FINN" in text and "Shipping: 69 NOK" in text and "Total: 520 NOK" in text
+    assert "Source: FINN (NO, EEA)" in text and "Shipping (est.): 69 NOK" in text
+    assert "Landed cost: 520 NOK" in text and "Import buffer" not in text
+    uk = make_ctx("obvious_steal", listing_price_nok=300, shipping_nok=140, import_buffer_nok=175,
+                  total_price_nok=615, seller_country="GB", seller_region="UK")
+    assert "Import buffer (est.): 175 NOK" in format_deal_alert(uk, score_listing(uk, cfg), "GOOD", "CardTrader")
     assert "PSA10 ref: 5 300 NOK" in text
     assert "Why:" in text
 
@@ -150,3 +154,25 @@ def test_notification_decision_is_persisted(engine, notifier):
     with session_scope() as s:  # fresh session: read back from the database
         ev = s.scalars(select(DealEvaluation).where(DealEvaluation.listing_id == lid)).one()
         assert ev.reason_json["notification"]["notify"] is True
+
+
+def test_outside_region_listing_scored_but_not_alerted_end_to_end(engine, notifier):
+    from app.collectors.base import RawListing, upsert_listing
+    from app.pricing.fx import get_rates
+
+    scan.run_collector("cardtrader", send_alerts=False)
+    with session_scope() as s:
+        card = s.scalar(select(Card).where(Card.name == "Gastly", Card.card_number == "177/162"))
+        listing = upsert_listing(s, RawListing(source="cardtrader", external_id="us-1", title="Gastly 177/162",
+                                               asking_price=20, currency="EUR", seller_country="US",
+                                               known_entity=("card", card.id)), get_rates(s))
+        ev, _, decision = evaluate_listing(s, listing, notifier=notifier)
+        assert ev.price_nok == listing.landed_cost_nok > listing.total_price_nok  # import buffer included
+        assert not decision.notify
+        assert any(b.startswith("seller_region_not_allowed") for b in decision.blocked_by)
+        lid = listing.id
+    with session_scope() as s:
+        ev = s.scalars(select(DealEvaluation).where(DealEvaluation.listing_id == lid)).one()
+        assert ev.reason_json["landed_cost"]["seller_region"] == "US"
+        assert any("seller_region_not_allowed" in b for b in ev.reason_json["notification"]["blocked_by"])
+    assert not notifier.sent

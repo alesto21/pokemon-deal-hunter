@@ -10,7 +10,16 @@ import type { DealsResponse } from "@/lib/types";
 const RECS = ["STEAL", "STRONG_BUY", "GOOD", "WATCH", "IGNORE"];
 
 export default function DealsPage() {
-  const [f, setF] = useState({ source: "", min_score: "", binder_fit: "", min_price: "", max_price: "", q: "", status: "active" });
+  const [f, setF] = useState({
+    source: "",
+    seller_region: "",
+    min_score: "",
+    binder_fit: "",
+    min_price: "",
+    max_price: "",
+    q: "",
+    status: "active",
+  });
   const [recs, setRecs] = useState<string[]>(["STEAL", "STRONG_BUY", "GOOD", "WATCH"]);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -20,6 +29,7 @@ export default function DealsPage() {
         source: f.source,
         min_score: f.min_score,
         binder_fit: f.binder_fit,
+        seller_region: f.seller_region,
         min_price: f.min_price,
         max_price: f.max_price,
         q: f.q,
@@ -51,13 +61,22 @@ export default function DealsPage() {
         </div>
       )}
       <Panel className="mb-6">
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
           <input className={`${input} col-span-2`} placeholder="Search title…" value={f.q} onChange={set("q")} />
           <select className={input} value={f.source} onChange={set("source")}>
             <option value="">All sources</option>
             <option value="cardtrader">CardTrader</option>
             <option value="finn">FINN</option>
             <option value="manual">Manual</option>
+          </select>
+          <select className={input} value={f.seller_region} onChange={set("seller_region")}>
+            <option value="">Any seller region</option>
+            <option value="EEA">EEA</option>
+            <option value="UK">UK</option>
+            <option value="Switzerland">Switzerland</option>
+            <option value="US">US</option>
+            <option value="Canada">Canada</option>
+            <option value="other">Other / unknown</option>
           </select>
           <select className={input} value={f.binder_fit} onChange={set("binder_fit")}>
             <option value="">Any binder fit</option>
@@ -68,8 +87,8 @@ export default function DealsPage() {
             <option value="none">None</option>
           </select>
           <input className={input} type="number" placeholder="Min score" value={f.min_score} onChange={set("min_score")} />
-          <input className={input} type="number" placeholder="Min NOK" value={f.min_price} onChange={set("min_price")} />
-          <input className={input} type="number" placeholder="Max NOK" value={f.max_price} onChange={set("max_price")} />
+          <input className={input} type="number" placeholder="Min landed NOK" value={f.min_price} onChange={set("min_price")} />
+          <input className={input} type="number" placeholder="Max landed NOK" value={f.max_price} onChange={set("max_price")} />
           <select className={input} value={f.status} onChange={set("status")}>
             <option value="active">Active</option>
             <option value="gone">Gone</option>

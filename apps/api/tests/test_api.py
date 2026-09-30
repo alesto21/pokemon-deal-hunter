@@ -80,3 +80,20 @@ def test_lot_valuation(client):
     assert up.status_code == 201
     assert client.post(f"/api/v1/lots/{lot['id']}/images",
                        files={"file": ("a.png", b"not an image", "image/png")}).status_code == 415
+
+
+def test_capped_listing_badge_and_filter(client):
+    """Evaluated without alerts (manual evaluate), the effective level is still stored and served."""
+    client.post("/api/v1/sources/cardtrader/run")
+    r = client.post("/api/v1/listings/manual", json={
+        "url": "https://www.finn.no/recommerce/forsale/item/612345678", "title": "Gastly 177/162 Temporal Forces",
+        "price": 200, "shipping_nok": 0, "fetch_metadata": False})
+    lid = r.json()["id"]
+    ev = client.post(f"/api/v1/listings/{lid}/evaluate").json()["evaluation"]  # send_alerts=False
+    assert ev["notification"] is None                      # no alert decision was made...
+    assert ev["raw_band"] == ev["recommendation"]
+    assert ev["details"]["item_discount_pct"] >= 0.45      # ...but the item is far below fair value,
+    assert ev["alert_level"] in ("STRONG_BUY", "GOOD")     # so the effective level is never STEAL
+    assert ev["alert_level"] == ev["details"]["effective"]["level"]
+    deals = client.get("/api/v1/deals", params={"recommendation": ev["alert_level"], "source": "finn"}).json()
+    assert lid in [d["id"] for d in deals["items"]]

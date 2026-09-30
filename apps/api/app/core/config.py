@@ -252,7 +252,6 @@ class CardTraderSourceConfig(BaseModel):
     exclude_graded: bool = True
     exclude_reverse_holo: bool = True
     one_listing_per_seller: bool = True
-    estimated_shipping_nok: float = 60
     track_sets_from_config: bool = True
     extra_expansion_codes: list[str] = []
     evaluate_cheapest_n: int = 3
@@ -272,6 +271,7 @@ class ShopConfig(BaseModel):
     base_url: str
     collection: str | None = None
     currency: str = "NOK"
+    country: str = "NO"
     estimated_shipping_nok: float = 0
 
 
@@ -295,7 +295,29 @@ class RetentionConfig(BaseModel):
     evaluation_days: int = 90
 
 
+EEA_COUNTRIES = ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV",
+                 "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "NO", "IS", "LI"]
+
+
+class ImportBuffer(BaseModel):
+    """Conservative uncertainty buffer for import VAT/duty/handling. NOT a tax calculation."""
+
+    pct_of_item: float = 0.0
+    fixed_nok: float = 0.0
+
+
 class SourcesConfig(BaseModel):
+    # Landed cost & seller regions (see docs/SOURCES.md). Unknown countries fall into "other".
+    deal_seller_regions: list[str] = ["EEA"]
+    region_countries: dict[str, list[str]] = {
+        "EEA": EEA_COUNTRIES, "UK": ["GB"], "Switzerland": ["CH"], "US": ["US"], "Canada": ["CA"],
+    }
+    shipping_nok_by_region: dict[str, float] = {
+        "EEA": 80, "UK": 140, "Switzerland": 140, "US": 250, "Canada": 250, "other": 300,
+    }
+    import_buffer_by_region: dict[str, ImportBuffer] = {
+        r: ImportBuffer(pct_of_item=0.25, fixed_nok=100) for r in ("UK", "Switzerland", "US", "Canada", "other")
+    }
     cardtrader: CardTraderSourceConfig = CardTraderSourceConfig()
     finn: FinnSourceConfig = FinnSourceConfig()
     stores: StoresSourceConfig = StoresSourceConfig()

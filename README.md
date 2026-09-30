@@ -71,7 +71,7 @@ Currency is NOK throughout. Everything else lives in `config/`:
 | `alerts.yaml` | notification thresholds, daily cap, cooldowns, GOOD rules, digest |
 | `grading.yaml` | grading cost (450 NOK), upside curve |
 | `currencies.yaml` | FX source and fallback rates |
-| `sources.yaml` | source toggles, schedules, rate limits, retention |
+| `sources.yaml` | seller regions, deal regions, shipping and import buffers by region, source toggles, schedules, rate limits, retention |
 
 Config files hot-reload. No restart needed, except for schedule changes (`docker compose restart worker`).
 
@@ -108,7 +108,9 @@ cd ../web && npm install && API_INTERNAL_URL=http://localhost:8000 npm run dev
 
 ## Dashboard
 
-Overview · Deals (filters, reasoning, add/import FINN listings, lots) · Watchlist · Portfolio ·
+Overview · Deals (badge = effective level after caps, raw score shown separately; expand a row for
+band → level → caps, landed-cost breakdown and the notification decision; filters, add/import FINN
+listings, lots) · Watchlist · Portfolio ·
 Price history · Match review · Sources · Collector health · Settings.
 
 ## How alerts are decided (short version)
@@ -117,11 +119,16 @@ Price history · Match review · Sources · Collector health · Settings.
    30-day median, over valid listings only (English, NM, raw, not reverse holo, one per seller).
    Stale expensive asks are ignored, and one cheap listing can't define it. Confidence drops when
    data is thin, dispersed or volatile.
-2. Score = weighted components + modifiers, which gives IGNORE / WATCH / GOOD / STRONG BUY / STEAL.
-3. The alert severity is capped by the actual discount (15 / 22 / 30%). A discount over 45% is
-   capped at STRONG BUY with a "verify listing" warning, because such listings are usually stale
-   or mispriced.
-4. Hard filters: fair value ≥ 250 NOK, match confidence ≥ 0.9, fair-value confidence ≥ 0.5,
+2. Every listing gets an estimated **landed cost** = item + shipping by seller region + an import
+   buffer for non-EEA sellers (`config/sources.yaml`). Discount, score and recommendation use the
+   landed cost, not the sticker price.
+3. Score = weighted components + modifiers, which gives a raw **score band**: IGNORE / WATCH /
+   GOOD / STRONG BUY / STEAL.
+4. The **effective level** is the band after caps, and it is what the dashboard badge and Telegram
+   show. The alert severity is capped by the actual discount (15 / 22 / 30%). An item priced over 45%
+   below fair value is capped at STRONG BUY with a "verify listing" warning, because such listings
+   are usually stale or mispriced.
+5. Hard filters: seller in `deal_seller_regions` (default EEA only), fair value ≥ 250 NOK, match confidence ≥ 0.9, fair-value confidence ≥ 0.5,
    sensible condition, no duplicates without a > 35% discount, no re-alert for the same listing
    **or the same card** without a real price drop, max 5/day (STEAL exempt). Dry-run and live
    alerts are counted separately.

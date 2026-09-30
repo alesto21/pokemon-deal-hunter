@@ -53,7 +53,7 @@ def send_watch_digest(notifier: TelegramNotifier | None = None) -> int:
     since = utcnow() - timedelta(days=1)
     with session_scope() as s:
         evs = s.scalars(select(DealEvaluation).where(DealEvaluation.timestamp >= since,
-                                                     DealEvaluation.recommendation == "WATCH")
+                                                     DealEvaluation.alert_level == "WATCH")
                         .order_by(DealEvaluation.total_score.desc()).limit(15)).all()
         if not evs:
             return 0

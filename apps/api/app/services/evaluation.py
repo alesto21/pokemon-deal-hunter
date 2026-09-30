@@ -30,7 +30,7 @@ from app.pricing.fair_value import FAIR_VALUE_MODEL_VERSION, FairValue
 from app.pricing.history import latest_snapshot
 from app.scoring.context import EvaluationContext
 from app.scoring.engine import ScoreResult, score_listing
-from app.scoring.policy import AlertState, Decision, PreviousAlert, decide
+from app.scoring.policy import AlertState, Decision, PreviousAlert, decide, effective_level
 from app.services.lots import lot_for_listing, value_lot
 from app.services.market import market_view
 
@@ -80,8 +80,10 @@ def _loose_pack_value(session: Session, set_code: str | None) -> float | None:
 def build_context(session: Session, listing: Listing, cfg: UserConfig | None = None) -> EvaluationContext:
     cfg = cfg or get_user_config()
     ctx = EvaluationContext(
-        source=listing.source, title=listing.title, total_price_nok=listing.total_price_nok,
+        source=listing.source, title=listing.title, total_price_nok=listing.scoring_price_nok,
         listing_price_nok=listing.normalized_price_nok, shipping_nok=listing.shipping_price_nok,
+        import_buffer_nok=listing.import_buffer_nok or 0.0, seller_country=listing.seller_country,
+        seller_region=listing.seller_region,
         listing_kind=listing.listing_kind, condition=listing.condition, description=listing.description,
         seller_rating=listing.seller_rating, match_confidence=listing.confidence, quantity=listing.quantity,
     )
@@ -163,14 +165,21 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
     cfg = get_user_config()
     ctx = build_context(session, listing, cfg)
     result = score_listing(ctx, cfg)
+    effective = effective_level(result, cfg)  # always stored, even when alerts are off
     fv = ctx.fair_value
     reason = result.to_json()
     reason["fair_value_explanation"] = fv.explanation if fv else []
     reason["history"] = ctx.history.__dict__
     reason["fair_value_flags"] = fv.flags if fv else []
     reason["fv_model"] = FAIR_VALUE_MODEL_VERSION
+    reason["effective"] = {"raw_band": effective.raw_band, "level": effective.level, "caps": effective.caps}
+    reason["landed_cost"] = {"item_price_nok": listing.normalized_price_nok,
+                             "shipping_nok": listing.shipping_price_nok,
+                             "import_buffer_nok": listing.import_buffer_nok or 0.0,
+                             "landed_cost_nok": listing.scoring_price_nok,
+                             "seller_country": listing.seller_country, "seller_region": listing.seller_region}
     ev = DealEvaluation(
-        listing_id=listing.id, price_nok=listing.total_price_nok,
+        listing_id=listing.id, price_nok=listing.scoring_price_nok,
         fair_value_nok=fv.fair_value_nok if fv else None, fair_value_low=fv.fair_value_low if fv else None,
         fair_value_high=fv.fair_value_high if fv else None, fair_value_confidence=fv.confidence if fv else None,
         discount_pct=result.discount_pct,
@@ -183,6 +192,7 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
         portfolio_score=result.portfolio_points,
         seller_confidence_score=result.seller_confidence,
         total_score=result.total_score, recommendation=result.recommendation, binder_fit=result.binder_fit,
+        alert_level=effective.level,
         reason_json=reason,
     )
     session.add(ev)
@@ -210,7 +220,7 @@ def _send_alert(session: Session, listing: Listing, ev: DealEvaluation, ctx: Eva
     text = format_deal_alert(ctx, result, severity, label)
     sent = notifier.send(text, listing.url)
     alert = Alert(deal_evaluation_id=ev.id, listing_id=listing.id, kind="deal", severity=severity,
-                  price_nok=listing.total_price_nok, telegram_message_id=sent.message_id,
+                  price_nok=listing.scoring_price_nok, telegram_message_id=sent.message_id,
                   dry_run=sent.dry_run, message=text)
     session.add(alert)
     log.info("alert_sent" if sent.ok else "alert_failed", source=listing.source, listing_id=listing.id,
@@ -225,6 +235,6 @@ def needs_evaluation(session: Session, listing: Listing, max_age_hours: float = 
         return True
     if (last.reason_json or {}).get("fv_model") != FAIR_VALUE_MODEL_VERSION:
         return True
-    if abs(last.price_nok - listing.total_price_nok) > 0.5:
+    if abs(last.price_nok - listing.scoring_price_nok) > 0.5:
         return True
     return utcnow() - last.timestamp > timedelta(hours=max_age_hours)

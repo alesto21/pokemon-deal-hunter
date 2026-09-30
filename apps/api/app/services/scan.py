@@ -78,7 +78,7 @@ def run_collector(source: str, send_alerts: bool = True, notifier: TelegramNotif
                     continue
                 ev, _res, decision = evaluate_listing(s, listing, send_alerts, notifier)
                 evaluated += 1
-                deals += ev.recommendation in ("GOOD", "STRONG_BUY", "STEAL")
+                deals += ev.alert_level in ("GOOD", "STRONG_BUY", "STEAL")
                 alerts += bool(decision and decision.notify)
             _mark_gone(s, source, started)
             aggregate_day(s, date.today())

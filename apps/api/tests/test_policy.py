@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.scoring.engine import ScoreResult, score_listing
-from app.scoring.policy import AlertState, PreviousAlert, decide
+from app.scoring.policy import AlertState, PreviousAlert, decide, effective_level
 
 from .factories import make_ctx
 
@@ -127,3 +129,43 @@ def test_same_card_from_another_listing_is_not_realerted(cfg):
     assert decide(ctx, r, AlertState(previous_entity=much_cheaper_now, now=NOW), cfg).notify
     long_ago = PreviousAlert(NOW - timedelta(hours=48), 520)
     assert decide(ctx, r, AlertState(previous_entity=long_ago, now=NOW), cfg).notify
+
+
+# ---------------------------------------------------------------- effective level (badge)
+
+
+def test_effective_level_suspicious_guard_caps_steal(cfg):
+    ctx = make_ctx("obvious_steal", listing_price_nok=144, shipping_nok=80, total_price_nok=224, fair_value=381)
+    r = forced(score_listing(ctx, cfg), "STEAL", 95.5)
+    eff = effective_level(r, cfg)
+    assert (eff.raw_band, eff.level) == ("STEAL", "STRONG_BUY")
+    assert len(eff.caps) == 1 and "suspicious-price guard" in eff.caps[0]
+
+
+def test_effective_level_discount_cap(cfg):
+    ctx = make_ctx("obvious_steal", total_price_nok=740)  # ~18.7% landed discount
+    eff = effective_level(forced(score_listing(ctx, cfg), "STEAL", 95), cfg)
+    assert (eff.raw_band, eff.level) == ("STEAL", "GOOD")
+    assert "supports at most GOOD" in eff.caps[0]
+
+
+def test_effective_level_discount_below_good_becomes_watch(cfg):
+    ctx = make_ctx("obvious_steal", total_price_nok=800)  # ~12% → only WATCH supported
+    eff = effective_level(forced(score_listing(ctx, cfg), "GOOD", 78), cfg)
+    assert eff.level == "WATCH" and eff.caps
+
+
+def test_effective_level_uncapped(cfg):
+    ctx = make_ctx("obvious_steal", total_price_nok=600)  # ~34% discount, item not suspicious
+    eff = effective_level(forced(score_listing(ctx, cfg), "STEAL", 95), cfg)
+    assert (eff.raw_band, eff.level, eff.caps) == ("STEAL", "STEAL", [])
+    watch = effective_level(score_listing(make_ctx("fair_price"), cfg), cfg)
+    assert watch.level == watch.raw_band and not watch.caps
+
+
+@pytest.mark.parametrize("price", [224, 600, 740, 800])
+def test_telegram_severity_equals_effective_level(cfg, price):
+    """The badge and the Telegram severity come from the same function."""
+    ctx = make_ctx("obvious_steal", listing_price_nok=price - 80, shipping_nok=80, total_price_nok=price)
+    r = forced(score_listing(ctx, cfg), "STEAL", 96)
+    assert decide(ctx, r, AlertState(now=NOW), cfg).severity == effective_level(r, cfg).level

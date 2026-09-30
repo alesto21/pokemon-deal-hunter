@@ -9,6 +9,7 @@ from app.core.config import UserConfig
 from app.db.base import utcnow
 from app.matching.normalize import fold
 from app.portfolio.service import name_in
+from app.pricing.landed_cost import region_allowed_for_deals
 from app.scoring.context import EvaluationContext
 from app.scoring.engine import ScoreResult
 
@@ -51,6 +52,33 @@ def _discount_level(discount: float, cfg: UserConfig) -> str:
     return "WATCH"
 
 
+@dataclass
+class EffectiveLevel:
+    raw_band: str            # from the score alone
+    level: str               # after the discount cap and the suspicious-price guard
+    caps: list[str] = field(default_factory=list)
+
+
+def effective_level(result: ScoreResult, cfg: UserConfig) -> EffectiveLevel:
+    """The level a listing actually deserves after caps. Stateless: cooldowns, daily cap and hard
+    filters decide *whether* to notify (see ``decide``), not the level itself."""
+    a = cfg.alerts
+    raw = result.recommendation
+    discount = result.discount_pct or 0.0
+    caps: list[str] = []
+    level = LEVELS.index(raw)
+    supported = _discount_level(discount, cfg)
+    if LEVELS.index(supported) < level:
+        level = LEVELS.index(supported)
+        caps.append(f"landed discount {discount:.1%} supports at most {supported}")
+    item_discount = result.item_discount_pct if result.item_discount_pct is not None else discount
+    if item_discount >= a.suspicious_discount and level > LEVELS.index("STRONG_BUY"):
+        level = LEVELS.index("STRONG_BUY")
+        caps.append(f"suspicious-price guard: item price {item_discount:.0%} below fair value "
+                    f"(≥ {a.suspicious_discount:.0%}) — capped at STRONG_BUY, verify listing")
+    return EffectiveLevel(raw, LEVELS[level], caps)
+
+
 def _good_rule_hit(ctx: EvaluationContext, result: ScoreResult, cfg: UserConfig) -> bool:
     rules = cfg.alerts.good_rules
     if rules.watchlist_target_met and "watchlist_target_met" in result.modifiers:
@@ -66,11 +94,8 @@ def decide(ctx: EvaluationContext, result: ScoreResult, state: AlertState, cfg: 
     fair = ctx.fair_value.fair_value_nok if ctx.fair_value else None
     discount = result.discount_pct or 0.0
 
-    # Severity = min(score band, band supported by the raw discount).
-    level = min(LEVELS.index(result.recommendation), LEVELS.index(_discount_level(discount, cfg)))
-    if discount >= a.suspicious_discount:
-        level = min(level, LEVELS.index("STRONG_BUY"))
-    severity = LEVELS[level]
+    # Severity = score band capped by the landed discount and the suspicious-price guard.
+    severity = effective_level(result, cfg).level
     if severity in ("IGNORE", "WATCH"):
         if result.recommendation in ("IGNORE", "WATCH"):
             return Decision(False, severity, [f"score {result.total_score:.0f} is {result.recommendation}"])
@@ -79,6 +104,9 @@ def decide(ctx: EvaluationContext, result: ScoreResult, state: AlertState, cfg: 
     if severity == "GOOD" and not _good_rule_hit(ctx, result, cfg):
         blocked.append("GOOD without special rule (watchlist target / high-priority missing / premium fit)")
 
+    if ctx.seller_region is not None and not region_allowed_for_deals(ctx.seller_region, cfg.sources):
+        blocked.append(f"seller_region_not_allowed ({ctx.seller_region}"
+                       f"{', ' + ctx.seller_country if ctx.seller_country else ''})")
     high_priority_watch = ctx.watchlist_priority == "high"
     if not fair or (fair < a.minimum_notification_fair_value_nok and not high_priority_watch):
         blocked.append(f"fair value below {a.minimum_notification_fair_value_nok:.0f} NOK")

@@ -267,7 +267,7 @@ class CardTraderCollector:
             url=f"https://www.cardtrader.com/cards/{p['blueprint_id']}",
             description=p.get("description"), seller=user.get("username"),
             condition=props.get("condition"), language=props.get("pokemon_language"),
-            quantity=1, shipping_nok=self.cfg.sources.cardtrader.estimated_shipping_nok,
+            quantity=1, shipping_nok=None, seller_country=user.get("country_code"),
             is_graded=bool(p.get("graded")), known_entity=entity,
             listing_kind="sealed" if entity[0] == EntityType.PRODUCT else "single",
         )

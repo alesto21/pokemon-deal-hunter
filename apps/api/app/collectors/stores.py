@@ -61,6 +61,7 @@ class ShopifyAdapter:
                     title=p.get("title", ""), asking_price=float(v.get("price") or 0),
                     currency=self.shop.currency, url=f"{self.base}/products/{p.get('handle')}",
                     seller=self.shop.name, shipping_nok=self.shop.estimated_shipping_nok,
+                    seller_country=self.shop.country,
                     condition="Near Mint", image_urls=images,
                 ))
             if len(products) < 250:

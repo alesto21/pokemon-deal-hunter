@@ -71,12 +71,12 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
         <div className="space-y-6">
           <Panel title={l.title} actions={l.url ? <a className={btn} href={l.url} target="_blank" rel="noopener noreferrer">Open listing ↗</a> : undefined}>
             <div className="flex flex-wrap gap-4 text-sm">
-              <span>Total <b className="tabular-nums">{nok(l.total_price_nok)}</b></span>
+              <span>Landed cost <b className="tabular-nums">{nok(l.landed_cost_nok)}</b></span>
               <span>Source {l.source}</span>
               <span>Kind {l.listing_kind}</span>
               {l.evaluation && (
                 <span className="flex items-center gap-2">
-                  Score <b>{num(l.evaluation.total_score)}</b> <RecBadge rec={l.evaluation.recommendation} /> discount {pct(l.evaluation.discount_pct)}
+                  Score <b>{num(l.evaluation.total_score)}</b> <RecBadge rec={l.evaluation.alert_level} /> discount {pct(l.evaluation.discount_pct)}
                 </span>
               )}
             </div>
@@ -97,7 +97,7 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
                 <StatTile label="Priced items" value={`${lot.valuation.priced_items} / ${lot.valuation.total_items}`} />
                 <StatTile
                   label="Price vs conservative"
-                  value={lot.valuation.conservative_value_nok ? pct((lot.valuation.conservative_value_nok - l.total_price_nok) / lot.valuation.conservative_value_nok) : "—"}
+                  value={lot.valuation.conservative_value_nok ? pct((lot.valuation.conservative_value_nok - l.landed_cost_nok) / lot.valuation.conservative_value_nok) : "—"}
                   hint="positive = below value"
                 />
               </div>
