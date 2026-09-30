@@ -130,6 +130,26 @@ This stops api/worker/web, runs `pg_restore --clean --if-exists` into the runnin
 re-runs migrations and starts the services again. To restore onto a fresh VM: steps 1–4, then
 `docker compose up -d postgres`, then the restore script, then step 5.
 
+## Restarts, updates and scan locks
+
+`docker compose restart worker`, `up -d --build`, host reboots and `docker compose down` are all
+safe during a scan. The worker gets SIGTERM, stops scheduling new jobs, lets the running scan
+finish (normally 15–20 s) and releases its lock. Compose waits up to 60 s (`stop_grace_period`)
+before killing it. If it is ever killed anyway (SIGKILL, power loss), the restarted worker frees
+its predecessor's lock on start-up (`stale_lock_recovered` in `docker compose logs worker`).
+Any other abandoned lock expires after `scan_lock_stale_minutes` (10) in `config/sources.yaml`.
+Check the status with `docker compose exec api python -m app.cli source-health`. If it shows
+`worker: OVERDUE` (or the dashboard shows WORKER OVERDUE), the worker is not running:
+`docker compose ps worker`, `docker compose logs --tail 50 worker`, then `docker compose up -d worker`.
+Keep exactly one worker per deployment (the compose file already does; don't scale it).
+
+Known limitation: a scan started ad hoc (dashboard "Run now" or `scan-now`) that is hard-killed
+keeps its lock until the 10-minute stale timeout. Scheduled scans are recovered immediately
+when the worker restarts.
+
+Proxmox: shut the VM down with **Shutdown**, not **Stop**. That gives Docker time to stop the
+containers gracefully (set the VM's shutdown timeout ≥ 90 s under Options → Start/Shutdown order).
+
 ## Updating
 
 ```bash

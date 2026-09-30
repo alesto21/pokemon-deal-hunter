@@ -17,10 +17,12 @@
 
 * **api** and **worker** run the same Python image with different commands; `migrate` is a
   one-shot container that runs `alembic upgrade head` before either starts.
+* Scans are protected by a per-source **scan lock** with owner, heartbeat and stale timeout (see
+  "Scan locks and graceful shutdown" below).
 * **web** never talks to the API from the browser. A Next.js route handler (`/api/proxy/*`) adds the
   API key server-side. The browser only ever sees the web container.
 * No Redis/Celery: one scheduler process with `max_instances=1` per job plus a DB row lock per
-  source (`source_status.running_since`) is enough for a few requests every 30 minutes.
+  source (`source_status`) is enough for a few requests every 30 minutes.
 
 ## Repository layout (and why it differs from the suggested one)
 
@@ -54,9 +56,57 @@ would only add `sys.path` hacks or several pip packages. They are subpackages of
 with the same boundaries. Collectors stay isolated from each other: a collector only produces
 `RawListing`s and snapshots, and nothing else imports a specific collector.
 
+## Scan locks and graceful shutdown (`services/locks.py`, `worker.py`)
+
+The worker's scheduled scans and manual "Run now" / `scan-now` share one lock per source in
+`source_status`:
+
+| Column | Meaning |
+|---|---|
+| `running_since` | lock acquired at |
+| `lock_owner` | `role@hostname#pid-instance`, unique per process start (`worker@dealhunter-worker#1-6b7cba43`) |
+| `lock_heartbeat_at` | refreshed every `scan_lock_heartbeat_seconds` (60 s) by a background thread while scanning |
+| `next_run_at` | next scheduled scan, written by the worker (after each job and every minute) in database time; null = not scheduled |
+
+* **Time:** every lock timestamp, age, stale check and schedule check uses the **database clock**
+  (`db/clock.py::db_now`: `clock_timestamp()` on Postgres). Process clock skew cannot make a lock
+  look fresh or stale. The worker converts its next run to database time (DB now + time until
+  the job fires).
+* **Acquire:** one atomic conditional UPDATE. It succeeds only if the lock is free or its last
+  heartbeat is older than `scan_lock_stale_minutes` (10). A long but alive scan keeps
+  heartbeating and is never reclaimed. Reclaiming is logged as `stale_lock_reclaimed`.
+* **Release:** in `finally` (success or exception), and only by the owner (`WHERE lock_owner = me`).
+  One process can never release another process's valid lock.
+* **Graceful shutdown:** on SIGTERM/SIGINT the worker sets a shutdown flag (`run_collector` refuses
+  new scans), pauses the scheduler (no new jobs are dispatched) and calls `shutdown(wait=True)`, so
+  a running scan (~15–20 s) finishes and releases its lock. Docker allows 60 s
+  (`stop_grace_period`) before SIGKILL. A second signal is ignored.
+* **Recovery on worker start:** locks with a stale heartbeat are released, and so are locks owned
+  by a previous worker process on the same host (the worker has a fixed hostname,
+  `dealhunter-worker`, and only one worker runs per deployment, so that process is certainly
+  dead). Each recovery is logged (`stale_lock_recovered`, `startup_lock_recovery`). A restart after
+  a SIGKILL therefore resumes immediately. Only a lock from a different host has to wait for the
+  10-minute stale timeout.
+* A killed scan leaves no partial data: the whole scan is one database transaction.
+* **Health:** `/api/v1/sources`, `source-health` and the Sources page show `scan_lock` {locked,
+  owner, acquired_at, age_seconds, heartbeat_at, heartbeat_age_seconds, stale} and `worker`
+  {worker_scheduled, next_scheduled_scan, next_scan_overdue, next_scan_overdue_seconds,
+  last_successful_scan}.
+* **Overdue:** a graceful stop clears `next_run_at` ("not scheduled"). A hard-killed worker leaves
+  it behind. Once it is more than `scan_schedule_overdue_seconds` (120) in the past, the source
+  is reported **OVERDUE** and `healthy=false` (Sources and Overview pages show a red "WORKER
+  OVERDUE" badge). The timestamp is kept for diagnosis. Detection latency: killed during a scan →
+  ~2 min; killed between scans → up to one scan interval + 2 min (next_run_at still points to the
+  planned scan).
+* **Known limitation (accepted for v1):** a hard-killed *ad-hoc* scan (dashboard "Run now" or
+  `scan-now` via `docker compose exec`) leaves its lock until the stale timeout (10 min), because
+  only the worker's own predecessor lock is recovered instantly. One worker per deployment is
+  assumed.
+
 ## Data flow for one scan
 
-1. `worker` → `services.scan.run_collector("cardtrader")` takes the source lock.
+1. `worker` → `services.scan.run_collector("cardtrader")` takes the source scan lock (skipped if
+   shutdown has begun or another process holds a valid lock).
 2. `CardTraderCollector.sync_catalog` upserts cards/products for tracked sets (`config/sets.yaml`).
 3. One `GET /marketplace/products?expansion_id=…&language=en` per set. Every listing is
    classified by `cardtrader_filters.classify_listings` (see "Which listings count" below).

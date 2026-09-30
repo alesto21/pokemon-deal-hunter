@@ -60,6 +60,11 @@ export default function OverviewPage() {
                     <li key={s.source} className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-2">
                         <HealthDot healthy={s.healthy} /> {s.source}
+                        {s.next_scan_overdue && (
+                          <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                            WORKER OVERDUE
+                          </span>
+                        )}
                       </span>
                       <span className="text-xs text-zinc-500">last ok {dt(s.last_success)}</span>
                     </li>

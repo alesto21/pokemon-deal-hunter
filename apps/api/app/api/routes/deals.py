@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.serializers import listing_out
 from app.db.base import utcnow
-from app.db.models import Alert, CollectorRun, DealEvaluation, Listing, SourceStatus
+from app.db.models import Alert, CollectorRun, DealEvaluation, Listing
 from app.db.session import get_db
 from app.portfolio.service import portfolio_summary, value_holdings
 from app.services.market import fair_value_nok
@@ -72,8 +72,11 @@ def overview(db: Session = Depends(get_db)) -> dict:
     deals_today = db.scalar(select(func.count(func.distinct(DealEvaluation.listing_id))).where(
         DealEvaluation.timestamp >= start, level.in_(good))) or 0
     alerts_today = db.scalar(select(func.count(Alert.id)).where(Alert.sent_at >= start, Alert.kind == "deal")) or 0
-    sources = [{"source": s.source, "healthy": s.consecutive_failures == 0, "last_success": s.last_success,
-                "last_failure": s.last_failure} for s in db.scalars(select(SourceStatus)).all()]
+    from app.api.routes.sources import source_health  # same health logic as the Sources page
+
+    sources = [{"source": h["source"], "healthy": h["healthy"], "last_success": h["last_success"],
+                "last_failure": h["last_failure"], "next_scan_overdue": h["worker"]["next_scan_overdue"]}
+               for h in source_health(db) if h["enabled"]]
     summary = portfolio_summary(db, value_holdings(db, lambda t, i: fair_value_nok(db, t, i)))
     top = db.execute(latest_evaluations_query()
                      .where(Listing.status == "active", level.in_(good))

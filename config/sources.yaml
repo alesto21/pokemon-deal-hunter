@@ -79,6 +79,14 @@ scheduler:
   fx_refresh_hour: 6
   maintenance_hour: 3
   portfolio_snapshot_hour: 4
+  # Scan locks (one scan per source at a time, shared by the worker and manual "Run now").
+  # A lock whose heartbeat is older than this is treated as abandoned and reclaimed.
+  scan_lock_stale_minutes: 10
+  # A running scan refreshes its heartbeat this often (must be < half the stale timeout).
+  scan_lock_heartbeat_seconds: 60
+  # Health: if the stored "next scheduled scan" is more than this many seconds in the past, the
+  # worker is reported as OVERDUE (not running / hard-killed) instead of scheduled.
+  scan_schedule_overdue_seconds: 120
 
 retention:
   raw_snapshot_days: 30

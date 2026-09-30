@@ -1,5 +1,58 @@
 # Development log
 
+## 2026-10-01 — Scan-lock ownership, graceful worker shutdown, stale-lock recovery, overdue detection
+
+### Problem
+The worker stopped with `shutdown(wait=False)`. A scan running at SIGTERM was abandoned with
+its lock set, and a lock only expired after 45 minutes. So a restart, deploy or reboot during a
+scan silently paused all scanning for up to 45 minutes (seen in practice on 2026-10-01). Any
+process could also clear any lock.
+
+### Changes
+- `services/locks.py`: lock owner (`role@host#pid-instance`), acquired_at, heartbeat thread
+  (60 s); staleness measured from the last heartbeat; atomic acquire; owner-only release in
+  `finally`; start-up recovery of stale locks and of the same-host predecessor's lock.
+- Stale timeout 45 min → **10 min**, configurable: `scheduler.scan_lock_stale_minutes`, with
+  `scan_lock_heartbeat_seconds` validated to be < half of it.
+- Worker: SIGTERM/SIGINT → shutdown flag + pause + `shutdown(wait=True)`; no new scans once
+  shutdown has begun; next scheduled scan recorded after each job and every minute.
+- Docker: worker and api `stop_grace_period: 60s`; worker `stop_signal: SIGTERM` and a fixed
+  `hostname: dealhunter-worker` (container IDs change on recreate, which would defeat predecessor
+  recovery).
+- Migration `0004`: `source_status.lock_owner`, `lock_heartbeat_at`, `next_run_at`.
+- Health: `scan_lock` {locked, owner, acquired_at, age_seconds, heartbeat_at,
+  heartbeat_age_seconds, stale}, `next_scheduled_scan` and `worker_scheduled` in
+  `/api/v1/sources`, `source-health` and the Sources page.
+- **Overdue detection:** `scan_schedule_overdue_seconds: 120`. `worker` health block
+  {worker_scheduled, next_scheduled_scan, next_scan_overdue, next_scan_overdue_seconds,
+  last_successful_scan}; overdue ⇒ `healthy=false` and a red "WORKER OVERDUE" badge on the Sources
+  and Overview pages. A graceful stop clears the schedule. A stale timestamp from a hard kill turns
+  overdue, and the timestamp is kept for diagnosis.
+- **Database clock:** `db/clock.py::db_now` (Postgres `clock_timestamp()`, SQLite `strftime`). It is
+  authoritative for lock acquire, heartbeat, stale detection, start-up recovery, health ages and
+  the stored next-run time.
+- Tests: 164 (acquire/release, release on exception, graceful shutdown waits and blocks new jobs,
+  fresh lock respected, stale >10 min reclaimed, live heartbeat never stale, owner-only
+  release/heartbeat, restart after interrupted scan, recovery leaves foreign/own locks alone,
+  config validation, health API, DB-time stale detection, ±3 h app clock skew, heartbeat vs
+  reclaim, next run stored in DB time, overdue: future / inside grace / past grace / no timestamp,
+  graceful stop clears / hard-kill goes overdue / restart clears).
+
+### Verified live (Docker, real CardTrader scans)
+- SIGTERM mid-scan: `scheduler_stopping` → scan finished (`collector_run_ok`, success) →
+  `scheduler_stopped`. Restart took 11 s; the lock was free immediately; the new worker scanned
+  on schedule.
+- SIGKILL mid-scan: the lock was left behind; on `start` the worker logged `stale_lock_recovered`
+  (previous worker process on this host) and scanned on schedule. No dead period. The killed
+  scan left no partial data (single transaction).
+- A foreign lock 11 min old was shown as stale and reclaimed by the next scan. A fresh foreign
+  lock was respected.
+- Overdue: after SIGKILL (with next_run_at moved 5 min into the past to simulate elapsed time),
+  `source-health` showed `[BAD] … worker: OVERDUE … 301s ago`, the API reported `healthy=false`,
+  `next_scan_overdue=true`, and the Sources page showed WORKER OVERDUE. On `docker compose start
+  worker`, the lock was recovered and OVERDUE cleared within 5 s; the scan ran on schedule
+  (success) and the next scan was set 30 min ahead.
+
 ## 2026-10-01 — Seller regions and landed cost (model `executable-v6-landed`)
 
 ### Changes

@@ -161,9 +161,10 @@ export interface PortfolioSummaryCore {
 
 export interface OverviewSource {
   source: string;
-  healthy: boolean;
+  healthy: boolean | null;
   last_success: string | null;
   last_failure: string | null;
+  next_scan_overdue: boolean;
 }
 
 export interface Overview {
@@ -301,6 +302,22 @@ export interface SourceHealth {
   last_error: string | null;
   consecutive_failures: number;
   running: boolean;
+  scan_lock: {
+    locked: boolean;
+    owner: string | null;
+    acquired_at: string | null;
+    heartbeat_at: string | null;
+    age_seconds: number | null;
+    heartbeat_age_seconds: number | null;
+    stale: boolean;
+  };
+  worker: {
+    worker_scheduled: boolean;
+    next_scheduled_scan: string | null;
+    next_scan_overdue: boolean;
+    next_scan_overdue_seconds: number | null;
+    last_successful_scan: string | null;
+  };
   runs_24h: number;
   error_rate_24h: number | null;
   last_duration_ms: number | null;

@@ -41,7 +41,7 @@ docker compose exec api python -m app.cli add-portfolio-item --search "Charizard
 docker compose exec api python -m app.cli add-graded 1 10 5300    # card 1, PSA 10 = 5300 NOK
 docker compose exec api python -m app.cli test-telegram
 docker compose exec api python -m app.cli backfill-prices
-docker compose exec api python -m app.cli source-health
+docker compose exec api python -m app.cli source-health    # health, scan lock (owner/age/stale), next scan / OVERDUE
 docker compose exec api python -m app.cli cardtrader-check --set-code TEF        # set overview with fair values
 docker compose exec api python -m app.cli cardtrader-debug-card --set-code TEF --card-number 177   # every listing, used or why not
 docker compose exec api python -m app.cli alert-preview      # read-only: what would alert on a fresh day
@@ -71,9 +71,12 @@ Currency is NOK throughout. Everything else lives in `config/`:
 | `alerts.yaml` | notification thresholds, daily cap, cooldowns, GOOD rules, digest |
 | `grading.yaml` | grading cost (450 NOK), upside curve |
 | `currencies.yaml` | FX source and fallback rates |
-| `sources.yaml` | seller regions, deal regions, shipping and import buffers by region, source toggles, schedules, rate limits, retention |
+| `sources.yaml` | seller regions, deal regions, shipping and import buffers by region, source toggles, schedules, scan-lock timeouts (`scheduler.scan_lock_stale_minutes: 10`, `scan_lock_heartbeat_seconds: 60`) and worker-overdue detection (`scan_schedule_overdue_seconds: 120`), rate limits, retention |
 
 Config files hot-reload. No restart needed, except for schedule changes (`docker compose restart worker`).
+Restarting the worker is safe at any time: it lets a running scan finish (up to 60 s) before
+exiting, and a restarted worker frees any lock its predecessor left behind. If the worker dies,
+Sources/Overview show a red **WORKER OVERDUE** badge once its next scan is more than 2 minutes late.
 
 ## Environment variables (`.env`)
 

@@ -7,9 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings, get_user_config
-from app.db.base import utcnow
+from app.db.clock import db_now
 from app.db.models import CollectorRun, SourceStatus
 from app.db.session import get_db
+from app.services.locks import lock_info, schedule_info
 from app.services.scan import collector_factories, run_collector
 
 router = APIRouter(tags=["sources"])
@@ -33,7 +34,8 @@ def source_health(db: Session) -> list[dict]:
         "finn": {"enabled": cfg.finn.enabled, "interval_minutes": None, "mode": "manual URL ingestion",
                  "kind": "manual"},
     }
-    since = utcnow() - timedelta(hours=24)
+    now = db_now(db)  # lock ages and schedule health use database time
+    since = now - timedelta(hours=24)
     out = []
     for name, meta in configured.items():
         st = db.get(SourceStatus, name)
@@ -41,13 +43,22 @@ def source_health(db: Session) -> list[dict]:
                           .order_by(CollectorRun.started_at.desc())).all()
         last_ok = next((r for r in runs if r.success), None)
         failures = sum(1 for r in runs if not r.success)
-        healthy = (st is None or st.consecutive_failures == 0) if meta["enabled"] else None
+        lock = lock_info(st, now)
+        sched = schedule_info(st, now)
+        healthy = None
+        if meta["enabled"]:
+            # An overdue schedule means the worker is dead: never report that as healthy.
+            healthy = (st is None or st.consecutive_failures == 0) and not sched.next_scan_overdue
         out.append({
             "source": name, **meta, "healthy": healthy,
             "last_success": st.last_success if st else None, "last_failure": st.last_failure if st else None,
             "last_error": st.last_error if st else None,
             "consecutive_failures": st.consecutive_failures if st else 0,
-            "running": bool(st and st.running_since),
+            "running": lock.locked and not lock.stale,
+            "scan_lock": lock.as_dict(),
+            # next_scheduled_scan is written by the worker (DB time) after each job and every minute;
+            # null = worker stopped gracefully / source not scheduled; overdue = worker not running.
+            "worker": {**sched.as_dict(), "last_successful_scan": st.last_success if st else None},
             "runs_24h": len(runs), "error_rate_24h": round(failures / len(runs), 3) if runs else None,
             "last_duration_ms": last_ok.duration_ms if last_ok else None,
             "last_items_fetched": last_ok.items_fetched if last_ok else None,

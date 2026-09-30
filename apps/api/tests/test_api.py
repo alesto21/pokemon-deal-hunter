@@ -97,3 +97,46 @@ def test_capped_listing_badge_and_filter(client):
     assert ev["alert_level"] == ev["details"]["effective"]["level"]
     deals = client.get("/api/v1/deals", params={"recommendation": ev["alert_level"], "source": "finn"}).json()
     assert lid in [d["id"] for d in deals["items"]]
+
+
+def test_source_health_shows_lock_and_next_scan(client):
+    from datetime import datetime, timedelta
+
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    from app.services import locks
+    from app.worker import record_next_runs
+
+    sched = BackgroundScheduler()
+    sched.add_job(lambda: None, "interval", minutes=30, id="cardtrader",
+                  next_run_time=datetime.now().astimezone() + timedelta(minutes=5))
+    sched.start(paused=True)
+    try:
+        record_next_runs(sched)
+    finally:
+        sched.shutdown(wait=False)
+    locks.acquire("cardtrader", "worker@host#1-abc")
+    row = next(r for r in client.get("/api/v1/sources").json() if r["source"] == "cardtrader")
+    lock = row["scan_lock"]
+    assert lock["locked"] and lock["owner"] == "worker@host#1-abc" and lock["stale"] is False
+    assert lock["acquired_at"] and lock["age_seconds"] >= 0 and lock["heartbeat_age_seconds"] >= 0
+    worker = row["worker"]
+    assert row["running"] is True and worker["worker_scheduled"] is True
+    assert worker["next_scheduled_scan"] is not None and worker["next_scan_overdue"] is False
+    assert "last_successful_scan" in worker and row["healthy"] is True
+
+    # hard-killed worker: stale next_run_at → OVERDUE and never reported healthy
+    from app.db.clock import db_now
+    from app.db.models import SourceStatus
+    from app.db.session import session_scope
+
+    with session_scope() as s:
+        s.get(SourceStatus, "cardtrader").next_run_at = db_now(s) - timedelta(minutes=10)
+    row = next(r for r in client.get("/api/v1/sources").json() if r["source"] == "cardtrader")
+    assert row["worker"]["next_scan_overdue"] is True and row["worker"]["next_scan_overdue_seconds"] >= 590
+    assert row["worker"]["worker_scheduled"] is False and row["healthy"] is False
+
+    record_next_runs(None)  # graceful stop
+    row = next(r for r in client.get("/api/v1/sources").json() if r["source"] == "cardtrader")
+    assert row["worker"]["next_scheduled_scan"] is None and row["worker"]["worker_scheduled"] is False
+    assert row["worker"]["next_scan_overdue"] is False

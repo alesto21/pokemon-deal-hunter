@@ -56,7 +56,10 @@ export default function SourcesPage() {
                 <span className="flex items-center gap-2 text-xs text-zinc-500">
                   <HealthDot healthy={s.healthy} />
                   {s.healthy === null ? "disabled" : s.healthy ? "healthy" : "unhealthy"}
-                  {s.running && " · running"}
+                  {s.running && !s.worker.next_scan_overdue && " · running"}
+                  {s.worker.next_scan_overdue && (
+                    <span className="rounded bg-red-600 px-1.5 py-0.5 font-semibold text-white">WORKER OVERDUE</span>
+                  )}
                 </span>
               }
             >
@@ -64,7 +67,43 @@ export default function SourcesPage() {
               <Row label="Type" value={s.kind} />
               <Row label="Enabled" value={s.enabled ? "yes" : "no"} />
               <Row label="Interval" value={s.interval_minutes ? `${s.interval_minutes} min` : "—"} />
-              <Row label="Last success" value={dt(s.last_success)} />
+              <Row label="Last successful scan" value={dt(s.worker.last_successful_scan)} />
+              {s.kind === "scheduled" && (
+                <>
+                  <Row
+                    label="Next scheduled scan"
+                    value={
+                      s.worker.next_scan_overdue ? (
+                        <span className="font-semibold text-red-600 dark:text-red-400">
+                          OVERDUE {Math.round((s.worker.next_scan_overdue_seconds ?? 0) / 60)} min (was due{" "}
+                          {dt(s.worker.next_scheduled_scan)})
+                        </span>
+                      ) : s.worker.next_scheduled_scan ? (
+                        dt(s.worker.next_scheduled_scan)
+                      ) : s.enabled ? (
+                        "not scheduled (worker stopped)"
+                      ) : (
+                        "—"
+                      )
+                    }
+                  />
+                  <Row
+                    label="Scan lock"
+                    value={
+                      !s.scan_lock.locked
+                        ? "free"
+                        : s.scan_lock.stale
+                          ? `STALE (heartbeat ${Math.round(s.scan_lock.heartbeat_age_seconds ?? 0)} s ago)`
+                          : `held ${Math.round(s.scan_lock.age_seconds ?? 0)} s`
+                    }
+                  />
+                  {s.scan_lock.locked && (
+                    <div className="truncate text-right text-xs text-zinc-500" title={s.scan_lock.owner ?? ""}>
+                      {s.scan_lock.owner} · since {dt(s.scan_lock.acquired_at)}
+                    </div>
+                  )}
+                </>
+              )}
               <Row label="Last failure" value={dt(s.last_failure)} />
               <Row label="Consecutive failures" value={s.consecutive_failures} />
               <Row label="Runs (24h)" value={s.runs_24h} />

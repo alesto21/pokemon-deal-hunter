@@ -345,6 +345,8 @@ class ExchangeRate(Base):
 
 
 class SourceStatus(Base):
+    """Per-source health plus the scan lock (running_since = lock acquired_at)."""
+
     __tablename__ = "source_status"
 
     source: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -353,7 +355,10 @@ class SourceStatus(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     health_alert_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    running_since: Mapped[datetime | None] = mapped_column(DateTime)
+    running_since: Mapped[datetime | None] = mapped_column(DateTime)            # lock acquired_at
+    lock_owner: Mapped[str | None] = mapped_column(String(128))                  # role@host#pid-instance
+    lock_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)         # refreshed while scanning
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime)               # written by the worker (UTC)
 
 
 class CollectorRun(Base):

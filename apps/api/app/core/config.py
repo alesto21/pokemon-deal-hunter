@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -286,6 +286,16 @@ class SchedulerConfig(BaseModel):
     fx_refresh_hour: int = 6
     maintenance_hour: int = 3
     portfolio_snapshot_hour: int = 4
+    # A scan lock whose last heartbeat is older than this is considered abandoned and reclaimed.
+    scan_lock_stale_minutes: float = Field(default=10, gt=0)
+    # How often a running scan refreshes its lock heartbeat (must be well below the stale timeout).
+    scan_lock_heartbeat_seconds: float = Field(default=60, gt=0)
+    # "next scheduled scan" this far in the past means the worker is not running (e.g. hard-killed).
+    scan_schedule_overdue_seconds: float = Field(default=120, gt=0)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.scan_lock_heartbeat_seconds * 2 >= self.scan_lock_stale_minutes * 60:
+            raise ValueError("scan_lock_heartbeat_seconds must be less than half of scan_lock_stale_minutes")
 
 
 class RetentionConfig(BaseModel):

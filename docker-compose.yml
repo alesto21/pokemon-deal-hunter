@@ -44,6 +44,8 @@ services:
     build: *api-build   # same image as migrate/worker; any of them can trigger the (cached) build
     image: pokemon-deal-hunter-api:latest
     restart: unless-stopped
+    # uvicorn waits for in-flight requests and background tasks ("Run now" scans) on SIGTERM.
+    stop_grace_period: 60s
     environment: *app-env
     volumes:
       - appdata:/data
@@ -59,7 +61,14 @@ services:
     image: pokemon-deal-hunter-api:latest
     restart: unless-stopped
     environment: *app-env
-    command: ["python", "-m", "app.worker"]
+    command: ["python", "-m", "app.worker"]   # exec form: python is PID 1 and receives SIGTERM
+    # Stable hostname (the container ID changes on every recreate): the lock owner embeds it, so a
+    # restarted worker recognises a lock left by its killed predecessor and frees it immediately.
+    hostname: dealhunter-worker
+    # On SIGTERM the worker stops taking jobs and lets a running scan (~20 s) finish and release
+    # its lock. Docker sends SIGKILL only after this grace period (default would be 10 s).
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
     volumes:
       - appdata:/data
       - ./config:/srv/config:ro

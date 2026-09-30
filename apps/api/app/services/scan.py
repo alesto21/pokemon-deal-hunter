@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import date
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.collectors.base import Collector
@@ -18,9 +18,10 @@ from app.db.session import session_scope
 from app.notifications.telegram import TelegramNotifier
 from app.pricing.history import aggregate_day
 from app.services.evaluation import evaluate_listing, needs_evaluation
+from app.services.lifecycle import shutting_down
+from app.services.locks import scan_lock
 
 log = get_logger(__name__)
-LOCK_STALE_AFTER = timedelta(minutes=45)
 
 
 def collector_factories() -> dict[str, Callable[[], Collector]]:
@@ -39,36 +40,29 @@ def _status(session: Session, source: str) -> SourceStatus:
     return st
 
 
-def _acquire(source: str) -> bool:
-    with session_scope() as s:
-        _status(s, source)
-    with session_scope() as s:
-        now = utcnow()
-        res = s.execute(update(SourceStatus).where(
-            SourceStatus.source == source,
-            (SourceStatus.running_since.is_(None)) | (SourceStatus.running_since < now - LOCK_STALE_AFTER),
-        ).values(running_since=now))
-        return (res.rowcount or 0) == 1
-
-
-def _release(source: str) -> None:
-    with session_scope() as s:
-        s.execute(update(SourceStatus).where(SourceStatus.source == source).values(running_since=None))
-
-
 def run_collector(source: str, send_alerts: bool = True, notifier: TelegramNotifier | None = None) -> dict:
+    """Run one collector under its scan lock. The lock is always released (see ``locks.scan_lock``)."""
     factories = collector_factories()
     if source not in factories:
         raise ValueError(f"Unknown source {source}; choose from {', '.join(factories)}")
-    if not _acquire(source):
-        log.warning("collector_already_running", collector=source, action="skip")
-        return {"source": source, "skipped": "already running"}
+    if shutting_down():
+        log.info("collector_skipped_shutdown", collector=source, action="skip")
+        return {"source": source, "skipped": "shutting down"}
+    with scan_lock(source) as acquired:
+        if not acquired:
+            log.warning("collector_already_running", collector=source, action="skip")
+            return {"source": source, "skipped": "already running"}
+        return _run_locked(source, factories[source], send_alerts, notifier)
+
+
+def _run_locked(source: str, factory: Callable[[], Collector], send_alerts: bool,
+                notifier: TelegramNotifier | None) -> dict:
     started = utcnow()
     t0 = time.monotonic()
     summary: dict = {"source": source}
     try:
         with session_scope() as s:
-            collector = factories[source]()
+            collector = factory()
             result = collector.collect(s)
             s.flush()
             evaluated = deals = alerts = 0
@@ -100,8 +94,6 @@ def run_collector(source: str, send_alerts: bool = True, notifier: TelegramNotif
         log.error("collector_run_failed", collector=source, error=err)
         summary.update(ok=False, error=err)
         _record_failure(source, started, int((time.monotonic() - t0) * 1000), err, notifier)
-    finally:
-        _release(source)
     return summary
 
 
@@ -141,6 +133,8 @@ def _mark_gone(session: Session, source: str, run_started) -> None:
 
 def reevaluate_manual_listings(send_alerts: bool = True, notifier: TelegramNotifier | None = None) -> int:
     """Re-score active FINN/manual listings against fresh fair values (no network access)."""
+    if shutting_down():
+        return 0
     n = 0
     with session_scope() as s:
         for listing in s.scalars(select(Listing).where(

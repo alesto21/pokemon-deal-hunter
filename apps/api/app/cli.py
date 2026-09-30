@@ -439,7 +439,7 @@ def reset_price_history_cmd(yes: bool = typer.Option(False, "--yes", help="Skip 
 
 @cli.command("source-health")
 def source_health() -> None:
-    """Print collector health."""
+    """Print collector health, scan-lock status and the next scheduled scan."""
     from app.api.routes.sources import source_health as health
 
     with session_scope() as s:
@@ -447,6 +447,24 @@ def source_health() -> None:
             flag = {True: "OK ", False: "BAD", None: "OFF"}[row["healthy"]]
             typer.echo(f"[{flag}] {row['source']:10} mode={row['mode']:22} last_ok={row['last_success']} "
                        f"runs24h={row['runs_24h']} err_rate={row['error_rate_24h']} last_error={row['last_error']}")
+            if row["kind"] != "scheduled":
+                continue
+            lock = row["scan_lock"]
+            if lock["locked"]:
+                typer.echo(f"      lock: HELD by {lock['owner']} since {lock['acquired_at']} "
+                           f"(age {lock['age_seconds']}s, heartbeat {lock['heartbeat_age_seconds']}s ago, "
+                           f"stale={lock['stale']})")
+            else:
+                typer.echo("      lock: free")
+            w = row["worker"]
+            if w["next_scan_overdue"]:
+                typer.echo(f"      worker: OVERDUE — next scan was due {w['next_scheduled_scan']} UTC, "
+                           f"{w['next_scan_overdue_seconds']:.0f}s ago (worker not running?)")
+            elif w["next_scheduled_scan"]:
+                typer.echo(f"      worker: scheduled — next scan {w['next_scheduled_scan']} UTC")
+            else:
+                typer.echo("      worker: not scheduled (worker stopped or source disabled)")
+            typer.echo(f"      last successful scan: {w['last_successful_scan']}")
 
 
 @cli.command("seed-watchlist")

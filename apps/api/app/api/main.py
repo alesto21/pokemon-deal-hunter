@@ -19,9 +19,11 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.services.lifecycle import set_role
 
 
 def create_app() -> FastAPI:
+    set_role("api")
     s = get_settings()
     configure_logging(s.log_level, s.log_json)
     app = FastAPI(title="Pokémon Deal Hunter API", version="0.1.0",
