@@ -1,5 +1,6 @@
 "use client";
 
+import { CostNote, CostValue, LandedValue } from "./cost";
 import { Ban, BellRing, CircleCheck, ExternalLink, Info, Layers, ShieldAlert, X } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, useEffect } from "react";
@@ -70,7 +71,7 @@ function DetailBody({ d }: { d: DealDetail }) {
           <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1">
             <div>
               <div className="text-[11px] uppercase tracking-wider text-ink-3">Landed</div>
-              <div className="num text-xl font-semibold text-ink">{nok(d.price.landed_nok)}</div>
+              <div className="num text-xl font-semibold text-ink"><LandedValue p={d.price} /></div>
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wider text-ink-3">Fair value</div>
@@ -105,15 +106,22 @@ function DetailBody({ d }: { d: DealDetail }) {
         {/* PRICE */}
         <Block title="Price" icon={<span className="text-gold">1</span>}>
           <Field label={`Item (${num(d.price.asking, 2)} ${d.price.currency})`} value={nok(d.price.item_nok)} />
-          <Field label="Shipping (est.)" value={nok(d.price.shipping_nok)} />
+          <Field label="Shipping" value={<CostValue value={d.price.shipping_nok} basis={d.price.shipping_basis} />} />
+          {d.price.fees_nok > 0 && (
+            <Field label="Fees" value={<CostValue value={d.price.fees_nok} basis={d.price.fees_basis} />} />
+          )}
           <Field label="Import buffer (est.)" value={nok(d.price.import_buffer_nok)} />
           <div className="my-1 border-t border-line" />
-          <Field label={<span className="font-medium text-ink">Landed cost</span>} value={<b>{nok(d.price.landed_nok)}</b>} />
+          <Field
+            label={<span className="font-medium text-ink">Single-card landed cost</span>}
+            value={<b><LandedValue p={d.price} /></b>}
+          />
+          <CostNote p={d.price} />
           <div className="mt-2 text-xs text-ink-3">
             {sourceLabel(d.source)} · seller {d.seller ?? "?"} · {d.seller_country ?? "??"} ({d.seller_region ?? "unknown region"}) ·{" "}
             {d.condition ?? "condition ?"}
           </div>
-          <div className="mt-1 text-[11px] text-ink-3">Shipping and import buffer are estimates, not exact tax.</div>
+          <div className="mt-1 text-[11px] text-ink-3">Import buffer is an uncertainty allowance, not exact tax.</div>
         </Block>
 
         {/* MARKET */}

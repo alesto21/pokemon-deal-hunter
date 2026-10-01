@@ -77,10 +77,12 @@ def test_alert_message_format(cfg):
     r = score_listing(ctx, cfg)
     text = format_deal_alert(ctx, r, "STEAL", "FINN")
     assert text.startswith("🚨 <b>STEAL")
-    assert "Source: FINN (NO, EEA)" in text and "Shipping (est.): 69 NOK" in text
+    assert "Source: FINN (NO, EEA)" in text and "Shipping: 69 NOK (checkout quote)" in text
     assert "Landed cost: 520 NOK" in text and "Import buffer" not in text
     uk = make_ctx("obvious_steal", listing_price_nok=300, shipping_nok=140, import_buffer_nok=175,
-                  total_price_nok=615, seller_country="GB", seller_region="UK")
+                  total_price_nok=615, seller_country="GB", seller_region="UK", shipping_basis="estimated")
+    assert "Shipping: 140 NOK (ESTIMATE — verify at checkout)" in format_deal_alert(
+        uk, score_listing(uk, cfg), "GOOD", "CardTrader")
     assert "Import buffer (est.): 175 NOK" in format_deal_alert(uk, score_listing(uk, cfg), "GOOD", "CardTrader")
     assert "PSA10 ref: 5 300 NOK" in text
     assert "Why:" in text

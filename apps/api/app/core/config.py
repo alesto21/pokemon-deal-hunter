@@ -211,12 +211,24 @@ class WatchDigest(BaseModel):
     hour: int = 19
 
 
+class LiveValidation(BaseModel):
+    """Final live check of every alert candidate against the exact CardTrader blueprint."""
+
+    enabled: bool = True
+    requests_per_second: float = Field(default=0.5, gt=0)   # conservative, separate from scans
+    price_tolerance: float = 0.10       # candidate item price drift scan → blueprint (relative)
+    fair_value_tolerance: float = 0.20  # fair value drift scan → blueprint (relative)
+    conflict_ttl_hours: float = 24      # validation conflicts expire → re-validated next time
+
+
 class AlertsConfig(BaseModel):
     minimum_notification_fair_value_nok: float = 250
     minimum_discount_good: float = 0.15
     minimum_discount_strong_buy: float = 0.22
     minimum_discount_steal: float = 0.30
     suspicious_discount: float = 0.45       # deeper than this: warn + cap at STRONG_BUY
+    estimated_shipping_margin: float = 0.05 # extra discount STRONG_BUY/STEAL need when shipping is estimated
+    lot_min_coverage: float = 0.7           # lots alert only if this share of items is identified
     min_match_confidence: float = 0.90
     min_fair_value_confidence: float = 0.5
     allow_damaged: bool = False
@@ -228,6 +240,7 @@ class AlertsConfig(BaseModel):
     good_rules: GoodRules = GoodRules()
     watch_digest: WatchDigest = WatchDigest()
     source_health: dict[str, int] = {"failures_before_alert": 3}
+    live_validation: LiveValidation = LiveValidation()
 
 
 class GradingConfig(BaseModel):
@@ -252,6 +265,9 @@ class CardTraderSourceConfig(BaseModel):
     exclude_graded: bool = True
     exclude_reverse_holo: bool = True
     one_listing_per_seller: bool = True
+    # Asks above this multiple of the lower-market cluster (median of the cheapest half, max 5)
+    # are placeholder/absurd asks: excluded from all market statistics. 0 disables.
+    absurd_ask_multiple: float = 10.0
     track_sets_from_config: bool = True
     extra_expansion_codes: list[str] = []
     evaluate_cheapest_n: int = 3
@@ -260,8 +276,10 @@ class CardTraderSourceConfig(BaseModel):
 
 class FinnSourceConfig(BaseModel):
     enabled: bool = True
-    fetch_metadata: bool = True
-    estimated_shipping_nok: float = 0
+    # FINN's terms (robots.txt header) prohibit automated access without written permission, so the
+    # app never fetches FINN pages by default. Use the browser capture, CSV/JSON or manual entry.
+    fetch_metadata: bool = False
+    estimated_shipping_nok: float = 99   # used (and labelled ESTIMATED) when shipping isn't stated
 
 
 class ShopConfig(BaseModel):
@@ -316,6 +334,21 @@ class ImportBuffer(BaseModel):
     fixed_nok: float = 0.0
 
 
+class CardTraderCosts(BaseModel):
+    """Single-card delivered-cost estimates for CardTrader (used when no observed checkout quote
+    exists for the seller). All values are ESTIMATES and labelled as such."""
+
+    # A direct seller ships one parcel to Norway. Observed 2026-10-01: $16.42 from Belgium.
+    direct_shipping_nok_by_region: dict[str, float] = {
+        "EEA": 170, "UK": 200, "Switzerland": 200, "US": 250, "Canada": 250, "other": 300}
+    # CardTrader Zero: item → hub is free, the final Zero shipment to Norway is separate.
+    # A single-card purchase carries all of it (conservative).
+    zero_shipment_nok: float = 200
+    # Order fees ≈ fixed + % of items (observed: $2.02 on $15.90, $2.15 on $34.94).
+    fees_fixed_nok: float = 20
+    fees_pct: float = 0.01
+
+
 class SourcesConfig(BaseModel):
     # Landed cost & seller regions (see docs/SOURCES.md). Unknown countries fall into "other".
     deal_seller_regions: list[str] = ["EEA"]
@@ -328,6 +361,7 @@ class SourcesConfig(BaseModel):
     import_buffer_by_region: dict[str, ImportBuffer] = {
         r: ImportBuffer(pct_of_item=0.25, fixed_nok=100) for r in ("UK", "Switzerland", "US", "Canada", "other")
     }
+    cardtrader_costs: CardTraderCosts = CardTraderCosts()
     cardtrader: CardTraderSourceConfig = CardTraderSourceConfig()
     finn: FinnSourceConfig = FinnSourceConfig()
     stores: StoresSourceConfig = StoresSourceConfig()

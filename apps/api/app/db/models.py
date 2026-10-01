@@ -134,7 +134,23 @@ class Listing(Base):
     seller_country: Mapped[str | None] = mapped_column(String(2))
     seller_region: Mapped[str | None] = mapped_column(String(16), index=True)
     import_buffer_nok: Mapped[float] = mapped_column(Float, default=0)
-    # item + shipping + import buffer: the price used for discount, score and alerts
+    fees_nok: Mapped[float] = mapped_column(Float, default=0)
+    # "exact" (seller-stated / observed checkout) or "estimated" (config) — never present an
+    # estimate as exact. CardTrader shipping is estimated unless a seller quote was observed.
+    shipping_basis: Mapped[str] = mapped_column(String(12), default="estimated")
+    fees_basis: Mapped[str] = mapped_column(String(12), default="exact")
+    landed_cost_confidence: Mapped[float | None] = mapped_column(Float)
+    purchase_route: Mapped[str | None] = mapped_column(String(12))        # cardtrader: direct | zero
+    seller_external_id: Mapped[str | None] = mapped_column(String(64), index=True)  # basket grouping
+    # FINN / marketplace listing details (when known)
+    location: Mapped[str | None] = mapped_column(String(120))
+    seller_type: Mapped[str | None] = mapped_column(String(16))           # private | business
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    pickup_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    capture_method: Mapped[str | None] = mapped_column(String(16))        # manual | csv | capture | scan
+    extracted: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # text analysis (shipping, lot)
+    safety_flags: Mapped[list[str]] = mapped_column(JSON, default=list)    # "verify listing" style labels
+    # item + shipping + fees + import buffer: the price used for discount, score and alerts
     landed_cost_nok: Mapped[float | None] = mapped_column(Float, index=True)
 
     @property
@@ -313,6 +329,11 @@ class Lot(Base):
     images: Mapped[list[str]] = mapped_column(JSON, default=list)  # stored file names
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Automatic text analysis: how many items the listing says it has, and what was recognised.
+    stated_quantity: Mapped[int | None] = mapped_column(Integer)
+    extraction: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Future: image-assisted analysis results would be stored here (not implemented in v1).
+    image_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     items: Mapped[list[LotItem]] = relationship(cascade="all, delete-orphan", back_populates="lot")
 
@@ -328,6 +349,7 @@ class LotItem(Base):
     manual_value_nok: Mapped[float | None] = mapped_column(Float)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     condition: Mapped[str | None] = mapped_column(String(32))
+    origin: Mapped[str] = mapped_column(String(12), default="manual")  # manual | auto (text analysis)
 
     lot: Mapped[Lot] = relationship(back_populates="items")
 
@@ -376,3 +398,48 @@ class CollectorRun(Base):
     deals_found: Mapped[int] = mapped_column(Integer, default=0)
     alerts_sent: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
+
+
+class MarketDataConflict(Base):
+    """The market data for an entity cannot be trusted (e.g. the CardTrader website shows offers
+    the API does not, or a final live validation disagreed with the discovery scan).
+
+    While unresolved, the entity never alerts. Fair value is not modified or "corrected".
+    """
+
+    __tablename__ = "market_data_conflicts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(16))
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    source: Mapped[str] = mapped_column(String(16))          # validation | manual
+    reason: Mapped[str] = mapped_column(String(300))
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # diagnostics for investigation
+    note: Mapped[str | None] = mapped_column(Text)
+    detected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class SellerShippingQuote(Base):
+    """An observed checkout: what a seller really charged to ship to Norway (+ order fees).
+
+    One shipment can carry many cards ("you can still add 43 items for the same shipping"), so a
+    quote turns estimated shipping into exact shipping for that seller and is the basis for
+    seller-basket economics. Nothing is purchased automatically.
+    """
+
+    __tablename__ = "seller_shipping_quotes"
+    __table_args__ = (UniqueConstraint("source", "seller", "route", "destination", name="uq_seller_quote"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), default="cardtrader")
+    seller: Mapped[str] = mapped_column(String(200))                 # CardTrader username
+    seller_external_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    route: Mapped[str] = mapped_column(String(12), default="direct")  # direct | zero
+    destination: Mapped[str] = mapped_column(String(2), default="NO")
+    shipment_nok: Mapped[float] = mapped_column(Float)
+    fees_nok: Mapped[float | None] = mapped_column(Float)              # observed single-card order fees
+    capacity_items: Mapped[int | None] = mapped_column(Integer)        # extra items for the same shipping
+    observed_amounts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # original currency evidence
+    note: Mapped[str | None] = mapped_column(Text)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

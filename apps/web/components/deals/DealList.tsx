@@ -5,6 +5,7 @@ import type { DealRow } from "@/lib/dashboard";
 import { gainClass, nok, num, pct } from "@/lib/format";
 import { ConfidenceTag, DiscountCell, EntityCell, LandedCell, OpenListing, SellerTag, TopNote, entitySub, entityTitle } from "./bits";
 import { CardThumb } from "@/components/ui";
+import { LandedValue } from "./cost";
 
 function MobileDeal({ d }: { d: DealRow }) {
   return (
@@ -21,7 +22,7 @@ function MobileDeal({ d }: { d: DealRow }) {
         <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
           <div>
             <div className="text-ink-3">Landed</div>
-            <div className="num font-medium text-ink">{nok(d.price.landed_nok)}</div>
+            <LandedValue p={d.price} className="font-medium text-ink" />
           </div>
           <div>
             <div className="text-ink-3">Fair value</div>
@@ -52,7 +53,7 @@ export default function DealList({ items, onOpen, compact = false }: { items: De
       cell: (d) => <EntityCell entity={d.entity} fallback={d.title} extra={<TopNote deal={d} />} />,
       className: "min-w-[260px]",
     },
-    { key: "seller", header: "Source", cell: (d) => <SellerTag source={d.source} country={d.seller_country} region={d.seller_region} />, hideBelow: "lg" },
+    { key: "seller", header: "Source", cell: (d) => <SellerTag source={d.source} country={d.seller_country} region={d.seller_region} deal={d} />, hideBelow: "lg" },
     { key: "level", header: "Level", cell: (d) => <LevelBadge level={d.level} /> },
     { key: "score", header: "Score", align: "right", cell: (d) => <span className="text-ink-2">{num(d.score, 1)}</span>, hideBelow: "lg" },
     { key: "landed", header: "Landed", align: "right", cell: (d) => <LandedCell price={d.price} /> },

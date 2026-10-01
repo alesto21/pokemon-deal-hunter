@@ -112,6 +112,13 @@ export interface Listing {
   match_candidates: MatchCandidate[];
   image_urls: string[];
   evaluation: Evaluation | null;
+  pickup_required: boolean;
+  location: string | null;
+  seller_type: string | null;
+  published_at: string | null;
+  capture_method: string | null;
+  safety_flags: string[];
+  shipping_basis: string | null;
 }
 
 export interface LotValuation {

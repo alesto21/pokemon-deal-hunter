@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+import { CostNote, CostValue, LandedValue } from "@/components/deals/cost";
 import { ArrowUpRight, ShieldAlert, Tag } from "lucide-react";
 import Link from "next/link";
 import { Badge, CardThumb, EmptyState, LevelBadge } from "@/components/ui";
@@ -20,7 +22,7 @@ const ACCENT: Record<string, string> = {
   WATCH: "before:bg-sky-400/60",
 };
 
-function PriceRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+function PriceRow({ label, value, strong = false }: { label: string; value: ReactNode; strong?: boolean }) {
   return (
     <div className={`flex items-baseline justify-between gap-2 ${strong ? "text-ink" : "text-ink-3"}`}>
       <span className="text-xs">{label}</span>
@@ -65,11 +67,13 @@ export function DealCard({ d }: { d: DealRow }) {
       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-0.5 rounded-lg bg-surface px-3 py-2">
         <PriceRow label="Item" value={nok(p.item_nok)} />
         <PriceRow label="Fair value" value={nok(d.fair_value_nok)} />
-        <PriceRow label="Shipping" value={nok(p.shipping_nok)} />
+        <PriceRow label="Shipping" value={<CostValue value={p.shipping_nok} basis={p.shipping_basis} />} />
         <PriceRow label="Confidence" value={d.confidence !== null ? pct(d.confidence, 0) : "—"} />
+        <PriceRow label="Fees" value={<CostValue value={p.fees_nok} basis={p.fees_basis} />} />
+        <div />
         <PriceRow label="Import buffer" value={nok(p.import_buffer_nok)} />
         <div />
-        <PriceRow label="Landed" value={nok(p.landed_nok)} strong />
+        <PriceRow label="Landed" value={<LandedValue p={p} />} strong />
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs text-ink-3">Discount</span>
           <span className="num text-sm font-semibold text-gain">{pct(d.discount_pct, 1)}</span>
@@ -77,6 +81,7 @@ export function DealCard({ d }: { d: DealRow }) {
         <div />
         <div className="num text-right text-xs text-gain/80">{nok(d.discount_nok)} below fair</div>
       </div>
+      <CostNote p={p} />
 
       {note && (
         <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-200/90" title={note}>

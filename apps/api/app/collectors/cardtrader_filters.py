@@ -86,4 +86,35 @@ def classify_listings(products: list[dict[str, Any]], cfg: CardTraderSourceConfi
         if cfg.one_listing_per_seller and v.seller_id in seen_sellers:
             v.included, v.reason = False, "same seller already counted"
         seen_sellers.add(v.seller_id)
+    _exclude_absurd_asks(verdicts, cfg.absurd_ask_multiple)
     return verdicts
+
+
+def lower_market_base(cents: list[int]) -> float | None:
+    """Price level of the liquid lower-market cluster: median of the cheapest half (max 5).
+
+    One cheap listing among several cannot drag it down much; a single placeholder ask
+    can never raise it, because only the cheaper half is used.
+    """
+    if not cents:
+        return None
+    vals = sorted(cents)
+    k = min(5, max(1, (len(vals) + 1) // 2))
+    window = vals[:k]
+    mid = len(window) // 2
+    return float(window[mid]) if len(window) % 2 else (window[mid - 1] + window[mid]) / 2
+
+
+def _exclude_absurd_asks(verdicts: list[ListingVerdict], multiple: float) -> None:
+    """Placeholder / absurd asks (e.g. 10 000 EUR on a ~35 EUR card) are excluded relative to
+    the lower-market cluster — never by a fixed price. They stay visible in diagnostics and in
+    the excluded count, but never feed stats, history, liquidity or fair value."""
+    if multiple <= 0:
+        return
+    base = lower_market_base([v.price_cents for v in verdicts if v.included])
+    if not base:
+        return
+    for v in verdicts:
+        if v.included and v.price_cents > base * multiple:
+            v.included = False
+            v.reason = f"absurd ask (>{multiple:g}x lower-market {base / 100:.2f})"

@@ -1,17 +1,18 @@
 "use client";
 
-import { ExternalLink, Layers, List } from "lucide-react";
+import { ExternalLink, Layers, List, MousePointerClick } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { sourceLabel } from "@/components/deals/bits";
 import ReviewQueue from "@/components/listings/ReviewQueue";
-import { Badge, CardThumb, DataTable, EmptyState, ErrorBox, LevelBadge, Loading, PageHeader, Panel, type Column, input } from "@/components/ui";
+import { Badge, CardThumb, DataTable, EmptyState, ErrorBox, LevelBadge, Loading, PageHeader, Panel, type Column, btn, input } from "@/components/ui";
 import { api, qs, useApi } from "@/lib/api";
 import { nok, num, rel } from "@/lib/format";
 import type { Listing } from "@/lib/types";
 
 type Tab = "all" | "review" | "lots";
+const CAPTURE: Record<string, string> = { capture: "browser capture", manual: "pasted URL", csv: "CSV import" };
 const MATCH_TONE: Record<string, "gain" | "info" | "warn" | "neutral" | "loss"> = {
   auto: "gain",
   manual: "info",
@@ -89,13 +90,25 @@ function AllListings({ lotsOnly }: { lotsOnly: boolean }) {
         <div className="text-xs">
           <div className="text-ink-2">{sourceLabel(l.source)}</div>
           <div className="text-ink-3">
-            {l.seller_country ?? "??"} · {l.seller_region ?? "?"}
+            {l.source === "finn" ? l.location ?? "Norway" : `${l.seller_country ?? "??"} · ${l.seller_region ?? "?"}`}
           </div>
+          {l.capture_method && <div className="text-[11px] text-ink-3">via {CAPTURE[l.capture_method] ?? l.capture_method}</div>}
         </div>
       ),
       hideBelow: "lg",
     },
-    { key: "kind", header: "Kind", cell: (l) => <Badge>{l.listing_kind}</Badge>, hideBelow: "xl" },
+    {
+      key: "kind",
+      header: "Kind",
+      cell: (l) => (
+        <div className="flex flex-wrap gap-1">
+          <Badge>{l.listing_kind}</Badge>
+          {l.pickup_required && <Badge tone="warn" title="pickup only — travel/meeting cost not included">pickup</Badge>}
+          {l.safety_flags?.length > 0 && <Badge tone="warn" title={l.safety_flags.join("\n")}>{l.safety_flags.length} check</Badge>}
+        </div>
+      ),
+      hideBelow: "xl",
+    },
     {
       key: "match",
       header: "Match",
@@ -233,7 +246,16 @@ function ListingsView() {
 
   return (
     <>
-      <PageHeader title="Listings" icon={List} subtitle="Every listing the system has seen, its match to the catalogue, and its status." />
+      <PageHeader
+        title="Listings"
+        icon={List}
+        subtitle="Every listing the system has seen, its match to the catalogue, and its status."
+        actions={
+          <Link href="/capture" className={btn}>
+            <MousePointerClick size={14} /> Capture from FINN
+          </Link>
+        }
+      />
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-line" role="tablist">
         {tabs.map((t) => (
           <button

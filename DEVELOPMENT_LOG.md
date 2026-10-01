@@ -1,5 +1,98 @@
 # Development log
 
+## 2026-10-01 — FINN discovery: user-driven capture, lots, FINN economics, safety labels
+
+### Decision
+- FINN's robots.txt prohibits crawling and "systematic or regular" automated use without written
+  permission (quoted in docs/SOURCES.md). Automated search / saved-search discovery was therefore
+  **not** built. `finn-scan-now` refuses with an explanation. Only robots.txt was fetched, and no
+  FINN search page was ever requested. `finn.fetch_metadata` now defaults to false.
+- Discovery is user-driven instead: a bookmarklet reads the ad in the user's own browser and opens
+  `/capture` prefilled; the user confirms and saves. URL and CSV ingestion remain.
+
+### Added
+- `collectors/finn_text.py`: Norwegian shipping parser (exact / included / pickup / unknown) and
+  lot extraction (quantity, card numbers, Pokémon, sets, grades, sealed products).
+- `services/finn_analysis.py`: conservative lot identification (unique set+number match **and** the
+  Pokémon named), and neutral safety labels.
+- Migration 0007:
+  - listing location, seller_type, published_at, pickup_required, capture_method, extracted,
+    safety_flags
+  - lot stated_quantity / extraction / image_analysis
+  - lot_item origin
+- Lot alert gate: unknown item count or < 70 % identified → no alert. The lot fair-value confidence
+  scales with coverage.
+- API: `POST /api/v1/finn/capture`, `GET /dashboard/finn`.
+  CLI: `finn-source-health`, `finn-debug-listing`, `finn-scan-now`.
+- Dashboard:
+  - `/capture` page with the bookmarklet
+  - FINN panels on Overview and Sources
+  - added-age, pickup and lot badges on FINN deals
+  - capture method, pickup and safety checks on Listings
+
+### Verified
+- pytest 227 passed, ruff clean. Web: tsc, lint, 7 tests and build clean.
+- Docker: migration 0006 → 0007 applied. `/capture` 200, `dashboard/finn` ok.
+- No `finn.no` request appears in the API or worker logs.
+
+## 2026-10-01 — CardTrader delivered cost (cheap item ≠ cheap delivered)
+
+### Finding (manual checkout)
+- Mew ex 205/165, direct seller PokeBilly (BE): $15.90 item + $16.42 shipping to Norway + $2.02
+  fees = **$34.34**. CardTrader Zero alternative: $34.94 item + $2.15 fees (+ the final Zero
+  shipment separately). Our flat 80 NOK "EEA shipping" priced the Mew at 224 NOK landed and
+  produced the STRONG BUY. The cheap listing is real and buyable; the problem was delivered cost.
+- The manual `market_data_conflict` for Mew is resolved (note kept). The website/API listing
+  difference stays documented in docs/SOURCES.md.
+
+### Changes
+- CardTrader landed cost by route (direct / CardTrader Zero via `can_sell_via_hub`), estimated
+  fees, an `exact` / `estimated` basis per component, and landed-cost confidence (migration
+  0006). Seller checkout quotes (`seller_shipping_quotes`, `shipping-quote add|list`) make
+  shipping exact.
+- Level guard: estimated shipping needs +5 points of landed discount for STRONG BUY / STEAL.
+- Seller-basket groundwork: `basket_landed_cost`, `basket-preview`, `GET /dashboard/baskets`.
+- Dashboard: shipping/fees labelled "quote" vs "est.", "≈" landed cost, a "Shipping estimate —
+  verify at checkout" note with confidence and route. Telegram labels estimates too.
+
+### Result (live)
+- Mew (exact quote): 144 + 158 + 19 = 321 NOK landed, 15.7% → GOOD. It alerts as GOOD via the
+  high-priority-missing rule. Without the quote (estimated): 335 NOK, 11.9% → WATCH.
+- Eevee 188 (direct, estimated): 1,069 NOK landed, 9.4% → WATCH. Gengar ex 193 (Zero,
+  estimated): 745 NOK, −2.1% → WATCH. Neither alerts any more.
+
+## 2026-10-01 — Market-data input: placeholder asks, final live validation, conflicts
+
+### Investigation (Mew ex 205/165, blueprint 258698)
+- The user saw several EN NM offers at ~$15.90 on the website (CT Min $15.90, CT Market $20.14).
+  Our fair value was 34.91 EUR.
+- Both API endpoints return the **same** listings (EN ids 46/47 shared; all languages 93/95; no
+  truncation). There is no hidden native-price field (`price_cents` == `price`), the blueprint
+  is the same, and filtering is not the cause (the raw rows contain no other EN NM ask under ~34).
+- The endpoints differ only by a symmetric ~13% cross-currency presentation (EEA ×1.13 in the
+  USD view, US ×0.885).
+- **Neither endpoint contains the ~$15.90 offers.** The website itself is behind bot protection
+  (HTTP 503 to a scripted request, not bypassed). Mew is flagged with a manual
+  `market_data_conflict`, and its fair value is left as the API data supports.
+- 3 placeholder asks at 10,000.64 EUR were counted as valid listings. They did not move the
+  cheapest-5 / fair value, but did inflate the broad/trimmed medians and listing counts.
+
+### Changes
+- Relative absurd-ask exclusion (`absurd_ask_multiple: 10` × the lower-market cluster). 5×
+  was tried first: an audit showed 2,680 ordinary bulk exclusions (0.10 vs 0.60 EUR), so it was
+  raised to "wildly above". It also fixes the thin-market placeholder case (Mini Tin fair
+  value 54,627 → 221 NOK).
+- Final live validation of every alert candidate (exact blueprint + same-moment expansion data,
+  per-region cross-check, fresh fair value/score/policy). `market_data_conflicts` table
+  (migration 0005), automatic + manual (`market-conflict add|list|resolve`), and
+  `alert-preview --validate`.
+- Price history reset and rebuilt (one day) without placeholder asks; model `executable-v7`.
+
+### Result
+- `alert-preview`: Mew ex blocked (market_data_conflict, manual). Eevee 188 and Gengar ex 193
+  validated `ok` and still alert as GOOD. Gastly 177 is consistent across endpoints (not a
+  candidate).
+
 ## 2026-10-01 — Advanced collector dashboard
 
 ### Built

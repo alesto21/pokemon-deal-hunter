@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.schemas import ListingPatch, ManualListingIn, ReviewDecision
+from app.api.schemas import FinnCaptureIn, ListingPatch, ManualListingIn, ReviewDecision
 from app.api.serializers import evaluation_out, listing_out
 from app.collectors.finn import FinnIngestError, ingest_url, parse_import
 from app.core.security import InvalidURLError
@@ -61,6 +61,21 @@ def add_manual_listing(body: ManualListingIn, db: Session = Depends(get_db)) -> 
     return listing_out(listing, ev)
 
 
+@router.post("/finn/capture", status_code=201)
+def finn_capture(body: FinnCaptureIn, db: Session = Depends(get_db)) -> dict:
+    """Ingest a FINN listing captured from the user's own browser session (no app-side fetching)."""
+    try:
+        listing = ingest_url(db, str(body.url), body.title, body.price, "NOK", body.shipping_nok, body.condition,
+                             body.description, body.seller, fetch=False, location=body.location,
+                             seller_type=body.seller_type,
+                             published_at=body.published_at.replace(tzinfo=None) if body.published_at else None,
+                             image_urls=[str(u) for u in body.image_urls], capture_method="capture")
+    except (FinnIngestError, InvalidURLError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    ev, _, _ = evaluate_listing(db, listing)
+    return listing_out(listing, ev)
+
+
 @router.post("/listings/import")
 async def import_listings(file: UploadFile = File(...), db: Session = Depends(get_db)) -> dict:
     raw = await file.read(2_000_001)
@@ -75,7 +90,7 @@ async def import_listings(file: UploadFile = File(...), db: Session = Depends(ge
         try:
             with db.begin_nested():
                 listing = ingest_url(db, r["url"], r["title"], r["price"], r["currency"], r["shipping_nok"],
-                                     r["condition"], r["description"])
+                                     r["condition"], r["description"], capture_method="csv")
                 ev, _, _ = evaluate_listing(db, listing)
             created.append({"row": i, "listing_id": listing.id, "score": ev.total_score,
                             "recommendation": ev.recommendation})

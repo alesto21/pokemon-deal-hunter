@@ -62,3 +62,12 @@ class FakeNotifier:
 @pytest.fixture()
 def notifier() -> FakeNotifier:
     return FakeNotifier()
+
+
+@pytest.fixture(autouse=True)
+def _fast_live_validation(monkeypatch):
+    """Production validates at 0.5 req/s; tests must not sleep between mock requests."""
+    from app.core.http import RateLimiter
+    from app.services import validation
+
+    monkeypatch.setattr(validation, "_limiter", RateLimiter(1000))

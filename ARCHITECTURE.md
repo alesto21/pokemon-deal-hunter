@@ -30,7 +30,7 @@
 apps/api/            Python project (one package: app/)
   app/core/          settings (.env) + YAML user config, logging/redaction, polite HTTP, URL validation
   app/db/            SQLAlchemy models, session
-  app/collectors/    source adapters: cardtrader (+mock), finn (manual), stores (Shopify), base upsert
+  app/collectors/    source adapters: cardtrader (+mock), finn (user-driven capture; finn_text = shipping/lot text analysis), stores (Shopify), base upsert
   app/matching/      title parsing + card/product matcher with confidence bands
   app/pricing/       stats, fair value, history/aggregates/retention, FX, grading, sealed
   app/scoring/       evaluation context, scoring engine, notification policy
@@ -160,6 +160,11 @@ has a named reason, visible in `cardtrader-debug-card`:
 - not on vacation, not a multi-card bundle
 - **one listing per seller** (the seller's cheapest), so one seller's inventory cannot fill the
   cheapest-N window
+- **no absurd/placeholder asks:** a listing priced more than `absurd_ask_multiple` (10×) above the
+  lower-market cluster (the median of the cheapest half of valid listings, max 5) is excluded
+  from all statistics, history, liquidity and fair value, but stays visible in
+  `cardtrader-debug-card` ("absurd ask"). The rule is relative, never a fixed price. Live examples:
+  10,000.64 EUR asks on a ~35 EUR Mew ex, and a ~109,000 NOK ask on a 221 NOK tin.
 
 Prices always come from the per-expansion marketplace request. CardTrader's per-blueprint request
 returns the same listings in another display currency, with a ~13% cross-currency markup (see
@@ -222,6 +227,50 @@ Every listing stores `seller_country`, `seller_region`, item price, shipping, im
   value, because shipping dilutes the discount of cheap cards and would hide a suspicious listing.
 * Alerts only for sellers in `deal_seller_regions` (default `[EEA]`). Other listings are still
   stored, priced and scored, but blocked with `seller_region_not_allowed`.
+
+## CardTrader delivered cost (`pricing/landed_cost.py`)
+
+Cheap item ≠ cheap delivered. Observed checkout (2026-10-01, Mew ex 205, direct seller):
+$15.90 item + $16.42 shipping + $2.02 fees = $34.34. The old flat 80 NOK shipping made it a
+41% "STRONG BUY".
+
+* **Route** from the API's `user.can_sell_via_hub`: `direct` (the seller ships one parcel to
+  Norway) or `zero` (CardTrader Zero: item → hub is free, then a separate final Zero shipment).
+* **Single-card landed** = item + shipping + fees + import buffer. Each part has a **basis**:
+  `exact` (seller-stated, or an observed checkout quote recorded with
+  `shipping-quote add`) or `estimated` (config `cardtrader_costs`: direct EEA 170 NOK, Zero
+  200 NOK, fees 20 NOK + 1%). `landed_cost_confidence` is 1.0 when everything is exact, 0.6 when
+  estimated. Estimates are always labelled ("≈", "est.", "Shipping estimate — verify at
+  checkout").
+* **Guard:** with estimated shipping, STRONG BUY / STEAL need `estimated_shipping_margin` (5
+  points) more landed discount than usual.
+* The cheap listing itself stays **valid market data**: delivered cost affects the deal, never
+  the fair value.
+* **Seller baskets (groundwork):** one shipment can carry many cards. `basket_landed_cost` =
+  Σ items + one shipment + order fees + import, with `shipping_per_card` = shipment / n.
+  `basket-preview` and `GET /dashboard/baskets` compute it; nothing is purchased.
+
+## Final live validation and market-data conflicts (`services/validation.py`)
+
+The expansion-wide scan discovers candidates. **No alert is sent before a live validation**,
+made at the moment of alerting (rate-limited to 0.5 req/s):
+
+1. `marketplace/products?blueprint_id=…`: the candidate must still exist and be valid.
+2. The same expansion request the scan uses (same currency view as history): filters → stats →
+   fair value → score → alert policy all re-run on this fresh data.
+3. Cross-check listing by listing. The endpoints present prices in different currencies with a
+   uniform ~13% cross-currency markup per seller region (blueprint=USD/expansion=EUR: EEA
+   sellers 1.13, US sellers 0.885). Absolute prices are never compared across endpoints. A
+   conflict is raised when the endpoints disagree on the cheapest valid listings, when a
+   listing's price deviates from its region's ratio, or when the fair value moved more than
+   20% since the scan.
+
+Outcomes: `ok` (decision re-made on fresh data), `stale` (candidate gone), `conflict` (stored as
+`market_data_conflict` with full diagnostics), or `error` / `unvalidated`. None of the last
+three ever alerts. Validation conflicts expire after 24 h and are re-checked. **Manual**
+conflicts (`market-conflict add`) never expire. They exist for cases the API cannot show, e.g.
+the CardTrader website listing offers the API does not return. A card with an open conflict never
+alerts, and its fair value is never "corrected" by hand.
 
 ## Notification policy (`scoring/policy.py`)
 

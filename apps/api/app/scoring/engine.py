@@ -33,6 +33,8 @@ class ScoreResult:
     grading: GradingEconomics | None = None
     sealed: SealedAnalysis | None = None
     item_discount_pct: float | None = None    # item price alone vs fair value (sanity checks only)
+    shipping_basis: str = "exact"             # copied from the context for the level guard
+    landed_cost_confidence: float = 1.0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,8 @@ class ScoreResult:
             "warnings": self.warnings,
             "binder_fit": self.binder_fit,
             "item_discount_pct": self.item_discount_pct,
+            "shipping_basis": self.shipping_basis,
+            "landed_cost_confidence": self.landed_cost_confidence,
             "grading": self.grading.__dict__ if self.grading else None,
             "sealed": self.sealed.__dict__ if self.sealed else None,
         }
@@ -208,5 +212,10 @@ def score_listing(ctx: EvaluationContext, cfg: UserConfig) -> ScoreResult:
     if ctx.is_premium_target:
         reasons.append("on your premium target list")
 
+    if ctx.shipping_basis == "estimated":
+        warnings.append("shipping estimate — verify at checkout")
+    elif ctx.shipping_basis == "pickup":
+        warnings.append("pickup required — not delivered; travel/meeting cost not included")
     return ScoreResult(total, rec, round(discount, 4), comps, weighted, mods, seller_conf, pm.points, fit,
-                       reasons, warnings, grading, sealed, round(item_discount, 4))
+                       reasons, warnings, grading, sealed, round(item_discount, 4), ctx.shipping_basis,
+                       ctx.landed_cost_confidence)

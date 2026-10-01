@@ -30,12 +30,14 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.collectors.base import RawListing, upsert_listing
+from app.collectors.finn_text import parse_shipping
 from app.core.config import get_settings, get_user_config
 from app.core.http import robots_allowed
 from app.core.logging import get_logger
 from app.core.security import sanitize_text, validate_url
 from app.db.models import Listing
 from app.pricing.fx import get_rates
+from app.services.finn_analysis import analyse_finn_listing
 
 log = get_logger(__name__)
 SOURCE = "finn"
@@ -163,8 +165,15 @@ def fetch_metadata(url: str, transport: httpx.BaseTransport | None = None) -> Pa
 
 def ingest_url(session: Session, url: str, title: str | None = None, price: float | None = None,
                currency: str = "NOK", shipping_nok: float | None = None, condition: str | None = None,
-               description: str | None = None, seller: str | None = None, fetch: bool | None = None) -> Listing:
-    """Add or update one FINN listing from a URL the user supplied."""
+               description: str | None = None, seller: str | None = None, fetch: bool | None = None,
+               location: str | None = None, seller_type: str | None = None, published_at=None,
+               image_urls: list[str] | None = None, capture_method: str = "manual") -> Listing:
+    """Add or update one FINN listing the user found (URL paste, CSV/JSON import or browser capture).
+
+    Shipping: a value you give is exact; otherwise the listing text decides (stated amount →
+    exact, "fri frakt" → included, "kun henting" → pickup); otherwise the configured default is
+    used and labelled ESTIMATED. Afterwards the listing is analysed for lots and safety labels.
+    """
     url = validate_url(url, FINN_HOSTS)
     code = finn_code(url)
     cfg = get_user_config().sources.finn
@@ -177,15 +186,32 @@ def ingest_url(session: Session, url: str, title: str | None = None, price: floa
     if not title or price is None:
         raise FinnIngestError(
             "Could not determine title/price automatically — please supply them (e.g. --title and --price)")
+    description = description or (md.description if md else None)
+    if shipping_nok is not None:
+        ship_amount, ship_basis, pickup = shipping_nok, "exact", False
+        ship_evidence = "entered by you"
+    else:
+        info = parse_shipping(f"{title}\n{description or ''}")
+        pickup = info.kind == "pickup"
+        if info.kind in ("exact", "included", "pickup"):
+            ship_amount, ship_basis = info.amount_nok or 0.0, info.kind
+        else:
+            ship_amount, ship_basis = cfg.estimated_shipping_nok, "estimated"
+        ship_evidence = info.evidence
+    images = list(image_urls or []) or ([md.image] if md and md.image else [])
     raw = RawListing(
         source=SOURCE, external_id=code, url=url, title=title, asking_price=float(price),
         currency=(md.currency if md and md.currency and currency == "NOK" else currency) or "NOK",
-        shipping_nok=cfg.estimated_shipping_nok if shipping_nok is None else shipping_nok,
-        seller_country="NO",
-        description=description or (md.description if md else None), seller=seller, condition=condition,
-        image_urls=[md.image] if md and md.image else [],
+        shipping_nok=ship_amount, shipping_known=ship_basis != "estimated", shipping_basis=ship_basis,
+        seller_country="NO", description=description, seller=seller, condition=condition, image_urls=images,
+        location=location, seller_type=seller_type, published_at=published_at, pickup_required=pickup,
+        capture_method=capture_method,
     )
-    return upsert_listing(session, raw, get_rates(session))
+    listing = upsert_listing(session, raw, get_rates(session))
+    listing.extracted = {**(listing.extracted or {}),
+                         "shipping": {"basis": ship_basis, "amount_nok": ship_amount, "evidence": ship_evidence}}
+    analyse_finn_listing(session, listing)
+    return listing
 
 
 def parse_import(content: str, filename: str = "import.csv") -> list[dict]:

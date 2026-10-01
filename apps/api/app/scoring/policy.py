@@ -41,6 +41,12 @@ def _dropped(prev: PreviousAlert, price: float, min_drop: float) -> bool:
     return bool(prev.price_nok and prev.price_nok > 0 and (prev.price_nok - price) / prev.price_nok >= min_drop)
 
 
+def _threshold(level: str, cfg: UserConfig) -> float:
+    a = cfg.alerts
+    return {"STEAL": a.minimum_discount_steal, "STRONG_BUY": a.minimum_discount_strong_buy,
+            "GOOD": a.minimum_discount_good}.get(level, 0.0)
+
+
 def _discount_level(discount: float, cfg: UserConfig) -> str:
     a = cfg.alerts
     if discount >= a.minimum_discount_steal:
@@ -71,6 +77,16 @@ def effective_level(result: ScoreResult, cfg: UserConfig) -> EffectiveLevel:
     if LEVELS.index(supported) < level:
         level = LEVELS.index(supported)
         caps.append(f"landed discount {discount:.1%} supports at most {supported}")
+    # Estimated shipping: STRONG_BUY/STEAL only if the discount clears its threshold with a margin
+    # for the shipping uncertainty (cheap item != cheap delivered). Exact quotes need no margin.
+    if result.shipping_basis == "estimated" and level >= LEVELS.index("STRONG_BUY"):
+        margin = a.estimated_shipping_margin
+        backed = _discount_level(discount - margin, cfg)
+        if LEVELS.index(backed) < level:
+            caps.append(f"shipping estimated — {LEVELS[level]} needs ≥ "
+                        f"{_threshold(LEVELS[level], cfg) + margin:.0%} landed discount with estimated shipping "
+                        f"(have {discount:.1%}); verify at checkout")
+            level = LEVELS.index(backed)
     item_discount = result.item_discount_pct if result.item_discount_pct is not None else discount
     if item_discount >= a.suspicious_discount and level > LEVELS.index("STRONG_BUY"):
         level = LEVELS.index("STRONG_BUY")
@@ -104,6 +120,15 @@ def decide(ctx: EvaluationContext, result: ScoreResult, state: AlertState, cfg: 
     if severity == "GOOD" and not _good_rule_hit(ctx, result, cfg):
         blocked.append("GOOD without special rule (watchlist target / high-priority missing / premium fit)")
 
+    if ctx.market_conflict:
+        blocked.append(f"market_data_conflict: {ctx.market_conflict}")
+    if ctx.listing_kind == "lot":
+        cov = ctx.lot_coverage
+        if cov is None:
+            blocked.append("lot: total item count unknown — value coverage cannot be established")
+        elif cov < a.lot_min_coverage:
+            blocked.append(f"lot: only {cov:.0%} of items identified (< {a.lot_min_coverage:.0%}); "
+                           f"{ctx.lot_unidentified} unidentified")
     if ctx.seller_region is not None and not region_allowed_for_deals(ctx.seller_region, cfg.sources):
         blocked.append(f"seller_region_not_allowed ({ctx.seller_region}"
                        f"{', ' + ctx.seller_country if ctx.seller_country else ''})")

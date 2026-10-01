@@ -268,6 +268,8 @@ class CardTraderCollector:
             description=p.get("description"), seller=user.get("username"),
             condition=props.get("condition"), language=props.get("pokemon_language"),
             quantity=1, shipping_nok=None, seller_country=user.get("country_code"),
+            seller_external_id=str(user["id"]) if user.get("id") is not None else None,
+            via_hub=bool(user.get("can_sell_via_hub")),
             is_graded=bool(p.get("graded")), known_entity=entity,
             listing_kind="sealed" if entity[0] == EntityType.PRODUCT else "single",
         )

@@ -60,9 +60,13 @@ def _print_eval(listing, ev, result, decision) -> None:
     typer.echo(f"\n#{listing.id} [{listing.source}] {listing.title}")
     typer.echo(f"  match: {listing.match_status} ({listing.confidence:.2f}) → "
                f"card={listing.matched_card_id} product={listing.matched_product_id}")
-    typer.echo(f"  seller: {listing.seller_country or '?'} ({listing.seller_region or '?'}) | item "
-               f"{listing.normalized_price_nok:.0f} + shipping {listing.shipping_price_nok:.0f} + import buffer "
-               f"{listing.import_buffer_nok or 0:.0f} = landed {listing.scoring_price_nok:.0f} NOK")
+    route = f", {listing.purchase_route}" if listing.purchase_route else ""
+    where = f"{listing.seller_country or '?'} ({listing.seller_region or '?'}{route})"
+    typer.echo(f"  seller: {listing.seller or '?'} {where}"
+               f" | item {listing.normalized_price_nok:.0f} + shipping {listing.shipping_price_nok:.0f} "
+               f"[{listing.shipping_basis}] + fees {listing.fees_nok or 0:.0f} [{listing.fees_basis}] + import "
+               f"{listing.import_buffer_nok or 0:.0f} = landed {listing.scoring_price_nok:.0f} NOK "
+               f"(landed-cost confidence {listing.landed_cost_confidence or 0:.0%})")
     typer.echo(f"  landed: {listing.scoring_price_nok:.0f} NOK | fair value: {ev.fair_value_nok or 0:.0f} NOK "
                f"(conf {ev.fair_value_confidence or 0:.2f}) | discount: {(ev.discount_pct or 0):.1%}")
     caps = (ev.reason_json.get("effective") or {}).get("caps", [])
@@ -373,13 +377,17 @@ def cardtrader_debug_card(
 
 
 @cli.command("alert-preview")
-def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ scores that would be blocked")) -> None:
-    """Read-only: which active listings would alert on a fresh day (no cooldowns yet)? Writes nothing."""
+def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ scores that would be blocked"),
+                  validate: bool = typer.Option(True, help="Run the final live blueprint validation (read-only)"),
+                  ) -> None:
+    """Read-only: which active listings would alert on a fresh day (no cooldowns yet)? Writes nothing.
+
+    Candidates go through the same final live validation as real alerts (persist=False)."""
     from app.api.routes.deals import latest_evaluations_query
     from app.db.models import DealEvaluation, Listing
     from app.scoring.engine import score_listing
     from app.scoring.policy import AlertState, PreviousAlert, decide, effective_level
-    from app.services.evaluation import build_context
+    from app.services.evaluation import build_context, confirm_alert
 
     cfg = get_user_config()
     with session_scope() as s:
@@ -394,14 +402,20 @@ def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ 
             ctx = build_context(s, listing, cfg)
             result = score_listing(ctx, cfg)
             key = (listing.matched_card_id, listing.matched_product_id)
-            d = decide(ctx, result, AlertState(previous_entity=sent.get(key), alerts_today=capped, now=utcnow()), cfg)
+            state = AlertState(previous_entity=sent.get(key), alerts_today=capped, now=utcnow())
+            d = decide(ctx, result, state, cfg)
+            validation = None
+            if validate:
+                d, ctx, result, validation = confirm_alert(s, listing, ctx, result, d, state, cfg, persist=False)
             eff = effective_level(result, cfg)
             fv = ctx.fair_value.fair_value_nok if ctx.fair_value else 0
             where = f"{listing.seller_country or '?'}/{listing.seller_region or '?'}"
             head = (f"{listing.title[:34]:34} {listing.source:10} {where:9} "
                     f"score {result.total_score:5.1f} (band {eff.raw_band})")
-            costs = (f"item {listing.normalized_price_nok:.0f} + ship {listing.shipping_price_nok:.0f} + import "
-                     f"{listing.import_buffer_nok or 0:.0f} = landed {listing.scoring_price_nok:.0f} NOK · "
+            est = "" if listing.shipping_basis == "exact" else " est."
+            costs = (f"item {listing.normalized_price_nok:.0f} + ship {listing.shipping_price_nok:.0f}{est} + fees "
+                     f"{listing.fees_nok or 0:.0f} + import {listing.import_buffer_nok or 0:.0f} = landed "
+                     f"{listing.scoring_price_nok:.0f} NOK · "
                      f"fair value {fv or 0:.0f} · discount {(result.discount_pct or 0):.1%}")
             if d.notify:
                 sent[key] = PreviousAlert(utcnow(), listing.scoring_price_nok)
@@ -413,6 +427,270 @@ def alert_preview(show_blocked: bool = typer.Option(True, help="Also list GOOD+ 
                 continue
             for cap in eff.caps:
                 typer.echo(f"      ↓ {cap}")
+            if validation is not None:
+                fresh = validation.details.get("fresh", {})
+                typer.echo(f"      ✓ live validation: {validation.status}"
+                           f"{' — ' + validation.reason if validation.reason else ''} "
+                           f"(blueprint fair value {fresh.get('fair_value_nok') or 0:.0f} NOK, "
+                           f"cheapest-5 {fresh.get('cheapest5') or 0:.0f}, {fresh.get('valid_listings', 0)} valid)")
+
+
+conflict_cli = typer.Typer(help="Market-data conflicts: cards whose market data must not be trusted for alerts.")
+cli.add_typer(conflict_cli, name="market-conflict")
+
+
+def _entity_for(s, card_id: int | None, blueprint: int | None):
+    from app.db.models import Card, Product
+
+    if card_id:
+        return "card", card_id
+    for model, etype in ((Card, "card"), (Product, "product")):
+        for row in s.scalars(select(model)).all():
+            if (row.source_ids or {}).get("cardtrader") == blueprint:
+                return etype, row.id
+    raise typer.BadParameter(f"no card/product with CardTrader blueprint {blueprint}")
+
+
+@conflict_cli.command("add")
+def conflict_add(reason: str = typer.Option(..., help="What disagrees, e.g. 'website NM EN ~$15.90; API $34'"),
+                 card_id: int = typer.Option(None),
+                 blueprint: int = typer.Option(None, help="CardTrader blueprint id"),
+                 note: str = typer.Option(None)) -> None:
+    """Manually flag a card: it never alerts until the conflict is resolved. Fair value is not changed."""
+    from app.db.models import MarketDataConflict
+
+    if not (card_id or blueprint):
+        raise typer.BadParameter("give --card-id or --blueprint")
+    with session_scope() as s:
+        etype, eid = _entity_for(s, card_id, blueprint)
+        c = MarketDataConflict(entity_type=etype, entity_id=eid, source="manual", reason=reason[:300], note=note,
+                               details={"blueprint_id": blueprint})
+        s.add(c)
+        s.flush()
+        typer.echo(f"conflict #{c.id} recorded for {etype} {eid}: alerts blocked until resolved")
+
+
+@conflict_cli.command("list")
+def conflict_list(all_: bool = typer.Option(False, "--all", help="Include resolved")) -> None:
+    """List market-data conflicts (open ones first)."""
+    from app.db.models import Card, MarketDataConflict, Product
+
+    with session_scope() as s:
+        q = select(MarketDataConflict).order_by(MarketDataConflict.resolved_at.is_not(None),
+                                                MarketDataConflict.detected_at.desc())
+        if not all_:
+            q = q.where(MarketDataConflict.resolved_at.is_(None))
+        for c in s.scalars(q).all():
+            e = s.get(Card if c.entity_type == "card" else Product, c.entity_id)
+            label = f"{e.name} {getattr(e, 'card_number', '') or ''}".strip() if e else f"{c.entity_type} {c.entity_id}"
+            state = f"resolved {c.resolved_at:%Y-%m-%d}" if c.resolved_at else "OPEN"
+            typer.echo(f"#{c.id:<4} {state:16} {c.source:10} {label[:30]:30} {c.reason}")
+
+
+@conflict_cli.command("resolve")
+def conflict_resolve(conflict_id: int) -> None:
+    """Mark a conflict resolved (alerts for that card are allowed again)."""
+    from app.db.models import MarketDataConflict
+
+    with session_scope() as s:
+        c = s.get(MarketDataConflict, conflict_id)
+        if not c:
+            raise typer.BadParameter("no such conflict")
+        c.resolved_at = utcnow()
+        typer.echo(f"conflict #{c.id} resolved")
+
+
+quote_cli = typer.Typer(help="Observed checkout shipping quotes per seller (exact shipping + basket groundwork).")
+cli.add_typer(quote_cli, name="shipping-quote")
+
+
+@quote_cli.command("add")
+def quote_add(
+    seller: str = typer.Option(..., help="CardTrader seller username, as on the listing"),
+    shipping: float = typer.Option(..., help="Shipping amount shown at checkout"),
+    currency: str = typer.Option("USD", help="Currency of the checkout amounts"),
+    fees: float = typer.Option(None, help="Order fees shown at checkout (single-card order)"),
+    route: str = typer.Option("direct", help="direct | zero"),
+    capacity: int = typer.Option(None, help="'You can still add N items for the same shipping'"),
+    note: str = typer.Option(None),
+) -> None:
+    """Record what a seller really charged to ship to Norway. Their listings then use exact shipping."""
+    from app.db.models import Listing, SellerShippingQuote
+    from app.pricing.fx import get_rates
+
+    if route not in ("direct", "zero"):
+        raise typer.BadParameter("route must be direct or zero")
+    with session_scope() as s:
+        fx = get_rates(s)
+        ext = s.scalar(select(Listing.seller_external_id).where(
+            Listing.source == "cardtrader", Listing.seller == seller,
+            Listing.seller_external_id.is_not(None)).limit(1))
+        q = s.scalar(select(SellerShippingQuote).where(SellerShippingQuote.source == "cardtrader",
+                                                       SellerShippingQuote.seller == seller,
+                                                       SellerShippingQuote.route == route))
+        if q is None:
+            q = SellerShippingQuote(source="cardtrader", seller=seller, route=route, shipment_nok=0)
+            s.add(q)
+        q.seller_external_id = ext
+        q.shipment_nok = fx.to_nok(shipping, currency)
+        q.fees_nok = fx.to_nok(fees, currency) if fees is not None else None
+        q.capacity_items = capacity
+        q.observed_amounts = {"shipping": shipping, "fees": fees, "currency": currency.upper(),
+                              "fx_nok_per_unit": fx.nok_per_unit.get(currency.upper())}
+        q.note, q.observed_at = note, utcnow()
+        s.flush()
+        n = _refresh_landed_for_seller(s, seller, route)
+        typer.echo(f"quote #{q.id}: {seller} ({route}) ships to NO for {q.shipment_nok:.0f} NOK"
+                   f"{f' + fees {q.fees_nok:.0f} NOK' if q.fees_nok is not None else ''}"
+                   f"{f', +{capacity} items same shipping' if capacity else ''}; {n} active listing(s) updated")
+
+
+def _refresh_landed_for_seller(s, seller: str, route: str) -> int:
+    """Recompute stored landed costs for a seller's active listings after a quote change."""
+    from app.collectors.base import find_quote
+    from app.db.models import Listing
+    from app.pricing.landed_cost import cardtrader_landed_cost
+
+    sources = get_user_config().sources
+    n = 0
+    for listing in s.scalars(select(Listing).where(Listing.source == "cardtrader", Listing.seller == seller,
+                                                   Listing.status == "active", Listing.purchase_route == route)).all():
+        cost = cardtrader_landed_cost(listing.normalized_price_nok, listing.seller_country, route == "zero", sources,
+                                      find_quote(s, "cardtrader", listing.seller_external_id, listing.seller, route))
+        listing.shipping_price_nok, listing.fees_nok = cost.shipping_nok, cost.fees_nok
+        listing.shipping_basis, listing.fees_basis = cost.shipping_basis, cost.fees_basis
+        listing.landed_cost_confidence, listing.landed_cost_nok = cost.confidence, cost.landed_cost_nok
+        listing.total_price_nok = round(cost.item_price_nok + cost.shipping_nok, 2)
+        n += 1
+    return n
+
+
+@quote_cli.command("list")
+def quote_list() -> None:
+    """List observed checkout quotes."""
+    from app.db.models import SellerShippingQuote
+
+    with session_scope() as s:
+        for q in s.scalars(select(SellerShippingQuote).order_by(SellerShippingQuote.observed_at.desc())).all():
+            o = q.observed_amounts or {}
+            typer.echo(f"#{q.id:<3} {q.seller[:20]:20} {q.route:6} ship {q.shipment_nok:6.0f} NOK "
+                       f"fees {q.fees_nok or 0:5.0f} NOK  capacity {q.capacity_items or '-'}  "
+                       f"(observed {o.get('shipping')} {o.get('currency')}, {q.observed_at:%Y-%m-%d})")
+
+
+@cli.command("basket-preview")
+def basket_preview(listing_id: int, cards: str = typer.Option("1,2,5,10", help="Basket sizes to show")) -> None:
+    """Seller-basket economics: this listing's seller ships N cards (here: N copies at this listing's
+    price, as an illustration) in ONE shipment. Read-only; nothing is bought."""
+    from app.collectors.base import find_quote
+    from app.db.models import Listing
+    from app.pricing.landed_cost import basket_landed_cost, cardtrader_landed_cost
+    from app.services.market import market_view
+
+    cfg = get_user_config()
+    with session_scope() as s:
+        listing = s.get(Listing, listing_id)
+        if listing is None or listing.source != "cardtrader":
+            raise typer.BadParameter("give an active CardTrader listing id")
+        route = listing.purchase_route or "direct"
+        quote = find_quote(s, "cardtrader", listing.seller_external_id, listing.seller, route)
+        single = cardtrader_landed_cost(listing.normalized_price_nok, listing.seller_country, route == "zero",
+                                        cfg.sources, quote)
+        fv = market_view(s, "card", listing.matched_card_id).fair_value.fair_value_nok if listing.matched_card_id \
+            else None
+        basis = "observed checkout quote" if quote else "ESTIMATE (verify at checkout)"
+        typer.echo(f"{listing.title} · seller {listing.seller} ({listing.seller_country}, {route})")
+        typer.echo(f"item {single.item_price_nok:.0f} NOK · shipment {single.shipping_nok:.0f} NOK [{basis}]"
+                   f"{f' · capacity +{quote.capacity_items} items' if quote and quote.capacity_items else ''}"
+                   f" · fair value {fv or 0:.0f} NOK")
+        typer.echo(f"{'cards':>5} {'basket total':>13} {'ship/card':>10} {'landed/card':>12} {'vs fair value':>14}")
+        for n in [int(x) for x in cards.split(",")]:
+            b = basket_landed_cost([single.item_price_nok] * n, single.shipping_nok, cfg.sources,
+                                   listing.seller_country, quote.capacity_items if quote else None,
+                                   fees_fixed_nok=(quote.fees_nok - cfg.sources.cardtrader_costs.fees_pct *
+                                                   single.item_price_nok) if quote and quote.fees_nok else None)
+            per = b.landed_per_card_nok[0]
+            vs = f"{(fv - per) / fv:+.1%}" if fv else "-"
+            typer.echo(f"{n:>5} {b.total_nok:>9.0f} NOK {b.shipping_per_card_nok:>6.0f} NOK {per:>8.0f} NOK {vs:>14}")
+
+
+@cli.command("finn-scan-now")
+def finn_scan_now() -> None:
+    """Explains why there is no automated FINN search (and what to use instead)."""
+    typer.echo("Automated FINN discovery is not available: FINN's robots.txt states that crawling and\n"
+               "'automatiserte tjenester ... for systematisk eller regelmessig bruk' are not allowed without\n"
+               "explicit written consent from FINN.no. The app therefore never searches or crawls FINN.\n\n"
+               "Add listings you find instead:\n"
+               "  • browser capture: open the dashboard → Listings → 'Capture from FINN' (bookmarklet)\n"
+               "  • python -m app.cli add-listing <finn-url> --title … --price … [--shipping …]\n"
+               "  • python -m app.cli import-listings file.csv")
+    raise typer.Exit(2)
+
+
+@cli.command("finn-source-health")
+def finn_source_health() -> None:
+    """FINN ingestion status (user-driven; no automated discovery)."""
+    from app.services.dashboard import finn_summary
+
+    with session_scope() as s:
+        f = finn_summary(s)
+    c = f["counts"]
+    typer.echo(f"discovery: {'automated' if f['discovery']['automated'] else 'user-driven only'} — "
+               f"{f['discovery']['reason']}")
+    typer.echo(f"listings: {c['total']} total · {c['added_today']} added today · {c['active']} active · "
+               f"{c['matched']} matched · {c['needs_review']} need review · {c['lots']} lots · "
+               f"{c['pickup_only']} pickup-only")
+    typer.echo(f"by capture method: {c['by_capture_method']} · last added: {c['last_added']}")
+
+
+@cli.command("finn-debug-listing")
+def finn_debug_listing(listing_id: int, reanalyse: bool = typer.Option(False, help="Re-run text analysis")) -> None:
+    """Everything the app derived from one FINN listing: shipping, lot extraction, safety labels, valuation."""
+    from app.db.models import Listing
+    from app.services.evaluation import evaluate_listing
+    from app.services.finn_analysis import analyse_finn_listing
+    from app.services.lots import lot_for_listing, value_lot
+
+    with session_scope() as s:
+        listing = s.get(Listing, listing_id)
+        if listing is None or listing.source != "finn":
+            raise typer.BadParameter("not a FINN listing id")
+        if reanalyse:
+            analyse_finn_listing(s, listing)
+        ex = listing.extracted or {}
+        typer.echo(f"#{listing.id} FINN {listing.external_id} · {listing.title}")
+        seen = f"{listing.first_seen:%Y-%m-%d %H:%M}"
+        who = f"{listing.seller or '?'} ({listing.seller_type or '?'})"
+        typer.echo(f"  url: {listing.url} · captured via {listing.capture_method} · first seen {seen}"
+                   f" · location {listing.location or '?'} · seller {who}")
+        sh = ex.get("shipping", {})
+        typer.echo(f"  price {listing.asking_price:.0f} NOK · shipping {listing.shipping_price_nok:.0f} NOK "
+                   f"[{listing.shipping_basis}{' — ' + sh['evidence'] if sh.get('evidence') else ''}]"
+                   f"{' · PICKUP REQUIRED' if listing.pickup_required else ''} · delivered "
+                   f"{listing.scoring_price_nok:.0f} NOK (confidence {listing.landed_cost_confidence or 0:.0%})")
+        lot = ex.get("lot", {})
+        typer.echo(f"  kind: {listing.listing_kind} · match: {listing.match_status} ({listing.confidence:.2f})"
+                   f" card={listing.matched_card_id} product={listing.matched_product_id}")
+        signals = "; ".join(lot.get("reasons", [])) or "no lot signals"
+        typer.echo(f"  lot detection: score {lot.get('lot_score')} · {signals}")
+        for key in ("stated_quantity", "card_numbers", "pokemon", "sets", "grades", "sealed_products"):
+            if lot.get(key):
+                typer.echo(f"    {key}: {lot[key]}")
+        lot_row = lot_for_listing(s, listing.id)
+        if lot_row is not None:
+            v = value_lot(s, lot_row)
+            unid = v.unidentified if v.unidentified is not None else "unknown"
+            cov = f"{v.coverage:.0%}" if v.coverage is not None else "unknown"
+            typer.echo(f"  lot value (identified items only): conservative {v.conservative_value_nok:.0f} NOK · "
+                       f"{v.priced_quantity} identified · unidentified {unid} · coverage {cov}")
+            for line in v.lines:
+                typer.echo(f"    - {line['label']}: {line['unit_value_nok'] or 0:.0f} NOK × {line['quantity']}")
+        typer.echo(f"  safety labels: {listing.safety_flags or 'none'}")
+        ev, result, _ = evaluate_listing(s, listing, send_alerts=False)
+        typer.echo(f"  evaluation: score {ev.total_score:.1f} → {ev.alert_level} · "
+                   f"fair value {ev.fair_value_nok or 0:.0f} · discount {(ev.discount_pct or 0):.1%}")
+        for w in (ev.reason_json or {}).get("warnings", [])[:6]:
+            typer.echo(f"    ! {w}")
 
 
 @cli.command("purge-mock-data")
@@ -488,7 +766,7 @@ def import_listings(path: Path) -> None:
         try:
             with session_scope() as s:
                 listing = ingest_url(s, r["url"], r["title"], r["price"], r["currency"], r["shipping_nok"],
-                                     r["condition"], r["description"])
+                                     r["condition"], r["description"], capture_method="csv")
                 ev, *_ = evaluate_listing(s, listing)
                 typer.echo(f"ok   #{listing.id} {listing.title[:50]} → {ev.total_score:.0f} {ev.alert_level}")
         except Exception as exc:

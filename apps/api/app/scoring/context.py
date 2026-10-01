@@ -21,6 +21,11 @@ class EvaluationContext:
     listing_price_nok: float | None = None
     shipping_nok: float = 0.0
     import_buffer_nok: float = 0.0
+    fees_nok: float = 0.0
+    shipping_basis: str = "exact"           # exact | estimated (never present an estimate as exact)
+    fees_basis: str = "exact"
+    landed_cost_confidence: float = 1.0
+    purchase_route: str | None = None       # cardtrader: direct | zero
     seller_country: str | None = None
     seller_region: str | None = None
     listing_kind: str = "single"          # single|sealed|lot|graded
@@ -56,3 +61,8 @@ class EvaluationContext:
     watchlist_target_nok: float | None = None
     watchlist_priority: str | None = None
     is_premium_target: bool = False
+    # Open market_data_conflict for this card/product (reason), if any — blocks alerts.
+    market_conflict: str | None = None
+    # Lots: share of items identified & priced (None = total unknown) and how many are not.
+    lot_coverage: float | None = None
+    lot_unidentified: int | None = None

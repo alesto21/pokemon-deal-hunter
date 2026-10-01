@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
 from sqlalchemy import select
@@ -15,7 +16,7 @@ from app.db.base import utcnow
 from app.db.models import EntityType, Listing, ListingStatus, MatchStatus
 from app.matching.matcher import match_listing
 from app.pricing.fx import FxRates
-from app.pricing.landed_cost import estimate_landed_cost
+from app.pricing.landed_cost import ShippingQuote, cardtrader_landed_cost, estimate_landed_cost
 
 log = get_logger(__name__)
 
@@ -35,7 +36,16 @@ class RawListing:
     language: str | None = None
     quantity: int = 1
     shipping_nok: float | None = None      # None → regional estimate from sources.yaml
+    shipping_known: bool = False           # True when shipping_nok was stated by seller/user (exact)
     seller_country: str | None = None      # ISO-2; None/unknown → region "other"
+    seller_external_id: str | None = None  # source's seller id (seller-basket grouping)
+    via_hub: bool | None = None            # cardtrader: seller ships via CardTrader Zero
+    shipping_basis: str | None = None      # explicit basis: exact | estimated | included | pickup
+    location: str | None = None
+    seller_type: str | None = None         # private | business
+    published_at: datetime | None = None
+    pickup_required: bool = False
+    capture_method: str | None = None      # manual | csv | capture
     is_graded: bool = False
     grade_company: str | None = None
     grade: float | None = None
@@ -59,10 +69,35 @@ class Collector(Protocol):
     def collect(self, session: Session) -> CollectorResult: ...
 
 
+def find_quote(session: Session, source: str, seller_external_id: str | None, seller: str | None,
+               route: str) -> ShippingQuote | None:
+    """Observed checkout quote for this seller and route (exact shipping), if one was recorded."""
+    from app.db.models import SellerShippingQuote
+
+    if not (seller_external_id or seller):
+        return None
+    q = select(SellerShippingQuote).where(SellerShippingQuote.source == source, SellerShippingQuote.route == route)
+    q = q.where(SellerShippingQuote.seller_external_id == seller_external_id) if seller_external_id \
+        else q.where(SellerShippingQuote.seller == seller)
+    row = session.scalar(q.order_by(SellerShippingQuote.observed_at.desc()).limit(1))
+    if row is None and seller_external_id and seller:  # quote recorded by username only
+        row = session.scalar(select(SellerShippingQuote).where(
+            SellerShippingQuote.source == source, SellerShippingQuote.route == route,
+            SellerShippingQuote.seller == seller).order_by(SellerShippingQuote.observed_at.desc()).limit(1))
+    return ShippingQuote(row.shipment_nok, row.fees_nok, row.capacity_items) if row else None
+
+
 def upsert_listing(session: Session, raw: RawListing, fx: FxRates) -> Listing:
     """Insert or update a listing, normalise its price to NOK and (re)match it if needed."""
     price_nok = fx.to_nok(raw.asking_price, raw.currency)
-    cost = estimate_landed_cost(price_nok, raw.seller_country, get_user_config().sources, raw.shipping_nok)
+    sources = get_user_config().sources
+    if raw.source == "cardtrader":
+        route = "zero" if raw.via_hub else "direct"
+        cost = cardtrader_landed_cost(price_nok, raw.seller_country, bool(raw.via_hub), sources,
+                                      find_quote(session, raw.source, raw.seller_external_id, raw.seller, route))
+    else:
+        cost = estimate_landed_cost(price_nok, raw.seller_country, sources, raw.shipping_nok, raw.shipping_known,
+                                    raw.shipping_basis)
     total = round(price_nok + cost.shipping_nok, 2)
     listing = session.scalar(
         select(Listing).where(Listing.source == raw.source, Listing.external_id == raw.external_id)
@@ -92,6 +127,16 @@ def upsert_listing(session: Session, raw: RawListing, fx: FxRates) -> Listing:
     listing.seller_country = cost.seller_country
     listing.seller_region = cost.seller_region
     listing.import_buffer_nok = cost.import_buffer_nok
+    listing.fees_nok = cost.fees_nok
+    listing.shipping_basis = cost.shipping_basis
+    listing.fees_basis = cost.fees_basis
+    listing.landed_cost_confidence = cost.confidence
+    listing.purchase_route = cost.route
+    listing.seller_external_id = raw.seller_external_id
+    listing.pickup_required = raw.pickup_required
+    for attr in ("location", "seller_type", "published_at", "capture_method"):
+        if getattr(raw, attr) is not None:
+            setattr(listing, attr, getattr(raw, attr))
     listing.landed_cost_nok = cost.landed_cost_nok
     listing.is_graded = raw.is_graded
     listing.grade_company = raw.grade_company

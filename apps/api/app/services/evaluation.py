@@ -33,6 +33,7 @@ from app.scoring.engine import ScoreResult, score_listing
 from app.scoring.policy import AlertState, Decision, PreviousAlert, decide, effective_level
 from app.services.lots import lot_for_listing, value_lot
 from app.services.market import market_view
+from app.services.validation import ValidationResult, active_conflict, record_conflict, validate_candidate
 
 log = get_logger(__name__)
 
@@ -83,7 +84,10 @@ def build_context(session: Session, listing: Listing, cfg: UserConfig | None = N
         source=listing.source, title=listing.title, total_price_nok=listing.scoring_price_nok,
         listing_price_nok=listing.normalized_price_nok, shipping_nok=listing.shipping_price_nok,
         import_buffer_nok=listing.import_buffer_nok or 0.0, seller_country=listing.seller_country,
-        seller_region=listing.seller_region,
+        seller_region=listing.seller_region, fees_nok=listing.fees_nok or 0.0,
+        shipping_basis=listing.shipping_basis or "estimated", fees_basis=listing.fees_basis or "exact",
+        landed_cost_confidence=listing.landed_cost_confidence if listing.landed_cost_confidence is not None
+        else 0.6, purchase_route=listing.purchase_route,
         listing_kind=listing.listing_kind, condition=listing.condition, description=listing.description,
         seller_rating=listing.seller_rating, match_confidence=listing.confidence, quantity=listing.quantity,
     )
@@ -91,7 +95,9 @@ def build_context(session: Session, listing: Listing, cfg: UserConfig | None = N
         lot = lot_for_listing(session, listing.id)
         ctx.match_confidence = 1.0 if lot and lot.items else 0.0
         if lot and lot.items:
-            ctx.fair_value = value_lot(session, lot).as_fair_value()
+            valuation = value_lot(session, lot)
+            ctx.fair_value = valuation.as_fair_value()
+            ctx.lot_coverage, ctx.lot_unidentified = valuation.coverage, valuation.unidentified
         return ctx
 
     if listing.matched_card_id:
@@ -131,6 +137,9 @@ def build_context(session: Session, listing: Listing, cfg: UserConfig | None = N
         ctx.listing_kind = "graded"
         ctx.fair_value = (FairValue(ref, ref * 0.85, ref * 1.1, 0.6, [f"{listing.grade_company} {listing.grade:g} "
                                     f"manual reference"]) if ref else None)
+    conflict = active_conflict(session, *entity, cfg)
+    if conflict:
+        ctx.market_conflict = f"{conflict.reason} ({conflict.source})"
     wl = _watchlist(session, *entity)
     if wl:
         ctx.watchlist_target_nok, ctx.watchlist_priority = wl.target_buy_price, wl.priority
@@ -168,15 +177,22 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
     effective = effective_level(result, cfg)  # always stored, even when alerts are off
     fv = ctx.fair_value
     reason = result.to_json()
+    if listing.safety_flags:  # neutral "verify listing" labels from listing analysis
+        reason["warnings"] = [*reason.get("warnings", []), *listing.safety_flags]
+    if ctx.listing_kind == "lot":
+        reason["lot"] = {"coverage": ctx.lot_coverage, "unidentified": ctx.lot_unidentified}
     reason["fair_value_explanation"] = fv.explanation if fv else []
     reason["history"] = ctx.history.__dict__
     reason["fair_value_flags"] = fv.flags if fv else []
     reason["fv_model"] = FAIR_VALUE_MODEL_VERSION
     reason["effective"] = {"raw_band": effective.raw_band, "level": effective.level, "caps": effective.caps}
     reason["landed_cost"] = {"item_price_nok": listing.normalized_price_nok,
-                             "shipping_nok": listing.shipping_price_nok,
+                             "shipping_nok": listing.shipping_price_nok, "shipping_basis": listing.shipping_basis,
+                             "fees_nok": listing.fees_nok or 0.0, "fees_basis": listing.fees_basis,
                              "import_buffer_nok": listing.import_buffer_nok or 0.0,
                              "landed_cost_nok": listing.scoring_price_nok,
+                             "landed_cost_confidence": listing.landed_cost_confidence,
+                             "purchase_route": listing.purchase_route,
                              "seller_country": listing.seller_country, "seller_region": listing.seller_region}
     ev = DealEvaluation(
         listing_id=listing.id, price_nok=listing.scoring_price_nok,
@@ -200,17 +216,45 @@ def evaluate_listing(session: Session, listing: Listing, send_alerts: bool = Tru
     decision = None
     if send_alerts and listing.status == "active":
         notifier = notifier or TelegramNotifier()
-        decision = decide(ctx, result, _alert_state(session, listing, notifier.dry_run), cfg)
+        state = _alert_state(session, listing, notifier.dry_run)
+        decision = decide(ctx, result, state, cfg)
+        decision, alert_ctx, alert_result, validation = confirm_alert(session, listing, ctx, result, decision,
+                                                                      state, cfg)
         reason["notification"] = {"notify": decision.notify, "severity": decision.severity,
                                   "blocked_by": decision.blocked_by}
+        if validation is not None:
+            reason["validation"] = validation.as_dict()
         # The dict was already flushed; mutating it in place is invisible to SQLAlchemy.
         flag_modified(ev, "reason_json")
         if decision.notify and decision.severity:
-            _send_alert(session, listing, ev, ctx, result, decision.severity, notifier)
+            _send_alert(session, listing, ev, alert_ctx, alert_result, decision.severity, notifier)
     log.info("listing_evaluated", source=listing.source, listing_id=listing.id,
              match_id=listing.matched_card_id or listing.matched_product_id, score=result.total_score,
              action=result.recommendation)
     return ev, result, decision
+
+
+def confirm_alert(session: Session, listing: Listing, ctx: EvaluationContext, result: ScoreResult,
+                  decision: Decision, state: AlertState, cfg: UserConfig, persist: bool = True, client=None,
+                  ) -> tuple[Decision, EvaluationContext, ScoreResult, ValidationResult | None]:
+    """Final gate before an alert: validate the candidate live against its exact blueprint and
+    re-run the decision on the fresh data. Non-candidates pass through untouched.
+
+    ``persist=False`` (alert-preview) never writes conflicts.
+    """
+    if not (decision.notify and cfg.alerts.live_validation.enabled):
+        return decision, ctx, result, None
+    v = validate_candidate(session, listing, ctx, result, cfg, client=client)
+    if not v.ok:
+        if v.status == "conflict" and persist:
+            record_conflict(session, listing, v)
+        label = "market_data_conflict" if v.status == "conflict" else f"live validation {v.status}"
+        return Decision(False, decision.severity, [f"{label}: {v.reason}"]), ctx, result, v
+    assert v.ctx is not None and v.result is not None
+    fresh = decide(v.ctx, v.result, state, cfg)
+    if not fresh.notify:
+        fresh.blocked_by = [f"no longer qualifies on live data: {b}" for b in fresh.blocked_by]
+    return fresh, v.ctx, v.result, v
 
 
 def _send_alert(session: Session, listing: Listing, ev: DealEvaluation, ctx: EvaluationContext,

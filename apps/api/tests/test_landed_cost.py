@@ -104,12 +104,15 @@ def test_upsert_stores_region_and_landed_cost(session, cfg):
     session.flush()
     for ext, cc in (("a", "FI"), ("b", "US"), ("c", None)):
         upsert_listing(session, RawListing(source="cardtrader", external_id=ext, title="Gastly 177/162",
-                                           asking_price=80, currency="EUR", seller_country=cc,
+                                           asking_price=80, currency="EUR", seller_country=cc, via_hub=False,
                                            known_entity=("card", card.id)), FX)
     rows = {x.external_id: x for x in session.scalars(select(Listing)).all()}
-    assert (rows["a"].seller_region, rows["a"].shipping_price_nok, rows["a"].import_buffer_nok,
-            rows["a"].landed_cost_nok, rows["a"].total_price_nok) == ("EEA", 80, 0, 880, 880)
-    assert rows["b"].seller_region == "US" and rows["b"].landed_cost_nok == pytest.approx(800 + 250 + 300)
+    a = rows["a"]  # direct EEA seller: estimated shipping 170 + estimated fees 20 + 1 %
+    assert (a.seller_region, a.purchase_route, a.shipping_price_nok, a.fees_nok, a.import_buffer_nok) == \
+        ("EEA", "direct", 170, 28, 0)
+    assert a.landed_cost_nok == 800 + 170 + 28 and a.shipping_basis == "estimated" and a.fees_basis == "estimated"
+    assert a.landed_cost_confidence == 0.6
+    assert rows["b"].seller_region == "US" and rows["b"].landed_cost_nok == pytest.approx(800 + 250 + 28 + 300)
     assert rows["c"].seller_region == "other" and rows["c"].seller_country is None
 
 

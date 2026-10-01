@@ -7,6 +7,12 @@ minimum_discount_steal: 0.30
 # misdescribed listing than a real steal. It still alerts, but at most as STRONG_BUY (so it
 # counts toward the daily cap) and with a "verify before buying" warning.
 suspicious_discount: 0.45
+# Cheap item != cheap delivered. When shipping is only ESTIMATED (no observed checkout quote for
+# the seller), STRONG_BUY / STEAL additionally need this much extra landed discount (e.g. 22%+5%).
+estimated_shipping_margin: 0.05
+# Lots alert only when at least this share of the lot's items is identified and priced (the rest
+# is valued at 0), on top of the normal confidence and discount rules. Unknown totals never alert.
+lot_min_coverage: 0.7
 min_match_confidence: 0.90
 min_fair_value_confidence: 0.5
 allow_damaged: false
@@ -25,3 +31,12 @@ watch_digest:
   hour: 19
 source_health:
   failures_before_alert: 3
+# Final live validation: before any alert, the exact CardTrader blueprint is fetched and the
+# whole chain (filters -> stats -> fair value -> score -> policy) re-runs on that fresh data.
+# Disagreement with the discovery scan blocks the alert and records a market_data_conflict.
+live_validation:
+  enabled: true
+  requests_per_second: 0.5    # conservative; only alert candidates are validated
+  price_tolerance: 0.10       # candidate price drift between scan and blueprint endpoint
+  fair_value_tolerance: 0.20  # fair value drift between scan and blueprint endpoint
+  conflict_ttl_hours: 24      # validation conflicts expire (manual ones never do)

@@ -69,7 +69,11 @@ def deal_row(listing: Listing, ev: DealEvaluation) -> dict[str, Any]:
         "entity": entity_brief(listing),
         "price": {"asking": listing.asking_price, "currency": listing.currency,
                   "item_nok": listing.normalized_price_nok, "shipping_nok": listing.shipping_price_nok,
-                  "import_buffer_nok": listing.import_buffer_nok or 0.0, "landed_nok": landed},
+                  "shipping_basis": listing.shipping_basis or "estimated",
+                  "fees_nok": listing.fees_nok or 0.0, "fees_basis": listing.fees_basis or "exact",
+                  "import_buffer_nok": listing.import_buffer_nok or 0.0, "landed_nok": landed,
+                  "landed_cost_confidence": listing.landed_cost_confidence,
+                  "purchase_route": listing.purchase_route},
         "fair_value_nok": ev.fair_value_nok, "fair_value_low": ev.fair_value_low,
         "fair_value_high": ev.fair_value_high, "confidence": ev.fair_value_confidence,
         "discount_pct": ev.discount_pct,
@@ -79,6 +83,9 @@ def deal_row(listing: Listing, ev: DealEvaluation) -> dict[str, Any]:
         "reasons": r.get("reasons", []), "notification": r.get("notification"),
         "trend_30d": (r.get("history") or {}).get("trend_30d"), "evaluated_at": ev.timestamp,
         "binder_fit": ev.binder_fit,
+        "first_seen": listing.first_seen, "published_at": listing.published_at, "location": listing.location,
+        "pickup_required": listing.pickup_required, "safety_flags": listing.safety_flags or [],
+        "capture_method": listing.capture_method, "lot": r.get("lot"),
     }
 
 
@@ -640,4 +647,79 @@ def system(session: Session) -> dict[str, Any]:
         "diagnostics": {"ready_checks": checks, "environment": s.environment,
                         "recent_runs": [{"source": r.source, "started_at": r.started_at, "success": r.success,
                                          "duration_ms": r.duration_ms, "error": r.error} for r in runs[:10]]},
+    }
+
+
+# ---------------------------------------------------------------- seller baskets (groundwork)
+def seller_baskets(session: Session, min_cards: int = 2, limit: int = 50) -> dict[str, Any]:
+    """CardTrader sellers with several active evaluated listings: single-card purchases vs one
+    combined shipment. Read-only economics; nothing is purchased. Coverage note: the scanner
+    stores only the cheapest valid listings per card, so a seller's full inventory is not known."""
+    from app.collectors.base import find_quote
+    from app.pricing.landed_cost import basket_landed_cost, cardtrader_landed_cost
+
+    sources = get_user_config().sources
+    rows = session.execute(_latest_evals().where(Listing.status == "active", Listing.source == "cardtrader",
+                                                 Listing.seller_external_id.is_not(None))).all()
+    by_seller: dict[tuple[str, str], list[tuple[Listing, DealEvaluation]]] = defaultdict(list)
+    for listing, ev in rows:
+        by_seller[(listing.seller_external_id, listing.purchase_route or "direct")].append((listing, ev))
+    out = []
+    for (_sid, route), items in by_seller.items():
+        if len(items) < min_cards:
+            continue
+        first = items[0][0]
+        quote = find_quote(session, "cardtrader", first.seller_external_id, first.seller, route)
+        single = [cardtrader_landed_cost(lst.normalized_price_nok, lst.seller_country, route == "zero", sources, quote)
+                  for lst, _ in items]
+        basket = basket_landed_cost([c.item_price_nok for c in single], single[0].shipping_nok, sources,
+                                    first.seller_country, quote.capacity_items if quote else None)
+        singles_total = sum(c.landed_cost_nok for c in single)
+        fair_total = sum(ev.fair_value_nok or 0 for _, ev in items)
+        out.append({
+            "seller": first.seller, "seller_country": first.seller_country, "route": route,
+            "shipping_basis": "exact" if quote else "estimated", "cards": len(items),
+            "singles_landed_nok": round(singles_total, 2), "basket_landed_nok": basket.total_nok,
+            "saving_nok": round(singles_total - basket.total_nok, 2),
+            "shipping_per_card_nok": basket.shipping_per_card_nok, "fair_value_total_nok": round(fair_total, 2),
+            "basket_discount_pct": round((fair_total - basket.total_nok) / fair_total, 4) if fair_total else None,
+            "items": [{"listing_id": lst.id, "title": lst.title, "item_nok": lst.normalized_price_nok,
+                       "fair_value_nok": ev.fair_value_nok, "level": ev.alert_level or ev.recommendation,
+                       "basket_landed_nok": per} for (lst, ev), per in zip(items, basket.landed_per_card_nok,
+                                                                           strict=True)],
+        })
+    out.sort(key=lambda b: (b["basket_discount_pct"] is None, -(b["basket_discount_pct"] or 0)))
+    return {"baskets": out[:limit],
+            "note": "Only the cheapest valid listings per card are scanned, so seller inventories are partial."}
+
+
+# ---------------------------------------------------------------- FINN
+def finn_summary(session: Session) -> dict[str, Any]:
+    """FINN visibility. Discovery is user-driven (capture/URL/CSV): FINN's terms prohibit crawling."""
+    from app.db.models import MatchStatus
+
+    start_today = datetime.combine(utcnow().date(), datetime.min.time())
+    finn = select(func.count(Listing.id)).where(Listing.source == "finn")
+    active = Listing.status == "active"
+    by_method = dict(session.execute(select(Listing.capture_method, func.count(Listing.id))
+                                     .where(Listing.source == "finn").group_by(Listing.capture_method)).all())
+    return {
+        "discovery": {"automated": False,
+                      "reason": "FINN's robots.txt/terms prohibit automated crawling without written permission",
+                      "channels": ["browser capture (/capture)", "pasted URL", "CSV/JSON import"]},
+        "counts": {
+            "total": session.scalar(finn) or 0,
+            "added_today": session.scalar(finn.where(Listing.first_seen >= start_today)) or 0,
+            "active": session.scalar(finn.where(active)) or 0,
+            "matched": session.scalar(finn.where(active, Listing.match_status.in_(
+                [MatchStatus.AUTO, MatchStatus.MANUAL]))) or 0,
+            "needs_review": session.scalar(finn.where(active, Listing.match_status == MatchStatus.REVIEW,
+                                                      Listing.listing_kind != "lot")) or 0,
+            "lots": session.scalar(finn.where(active, Listing.listing_kind == "lot")) or 0,
+            "pickup_only": session.scalar(finn.where(active, Listing.pickup_required.is_(True))) or 0,
+            "by_capture_method": {k or "unknown": v for k, v in by_method.items()},
+            "last_added": session.scalar(select(func.max(Listing.first_seen)).where(Listing.source == "finn")),
+        },
+        "best": deals(session, source="finn", levels=["WATCH", *GOOD_PLUS], sort="score", limit=8)["items"],
+        "newest": deals(session, source="finn", sort="newest", limit=8)["items"],
     }

@@ -1,18 +1,21 @@
 "use client";
 
-import { Globe, Play, RadioTower, RefreshCw, Store, type LucideIcon } from "lucide-react";
+import { Globe, MousePointerClick, Play, RadioTower, RefreshCw, Store, type LucideIcon } from "lucide-react";
 import { useState } from "react";
+import Link from "next/link";
+import { FinnStatus } from "@/components/finn/FinnStatus";
 import RunsTable from "@/components/sources/RunsTable";
 import StatusCard, { type Status } from "@/components/system/StatusCard";
 import { LockRows, NextScan, fmtSeconds } from "@/components/system/WorkerRows";
 import { ErrorBox, Field, Loading, PageHeader, Panel, Segmented, btn } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { dt, pct, rel } from "@/lib/format";
+import type { FinnSummary } from "@/lib/dashboard";
 import type { CollectorRun, SourceHealth } from "@/lib/types";
 
 const META: Record<string, { title: string; icon: LucideIcon; blurb: string }> = {
   cardtrader: { title: "CardTrader", icon: RadioTower, blurb: "Official API · primary pricing and listings" },
-  finn: { title: "FINN", icon: Globe, blurb: "Manual URL / CSV ingestion only — never crawled" },
+  finn: { title: "FINN", icon: Globe, blurb: "Browser capture, pasted URL or CSV — never crawled (FINN's terms prohibit it)" },
   stores: { title: "Web shops", icon: Store, blurb: "Public Shopify products.json · opt-in per shop" },
 };
 
@@ -35,6 +38,7 @@ const n = (v: number | null | undefined) => (v === null || v === undefined ? "�
 export default function SourcesPage() {
   const { data, error, loading, reload } = useApi<SourceHealth[]>("sources");
   const [runSource, setRunSource] = useState<"cardtrader" | "stores">("cardtrader");
+  const finn = useApi<FinnSummary>("dashboard/finn");
   const runs = useApi<CollectorRun[]>(`sources/${runSource}/runs?limit=25`);
   const [msg, setMsg] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -66,6 +70,7 @@ export default function SourcesPage() {
             onClick={() => {
               reload();
               runs.reload();
+              finn.reload();
             }}
           >
             <RefreshCw size={14} /> Refresh
@@ -95,7 +100,13 @@ export default function SourcesPage() {
                       <Play size={13} /> {s.running ? "Scan running…" : "Run now"}
                     </button>
                   ) : (
+                    s.source === "finn" ? (
+                    <Link href="/capture" className={btn}>
+                      <MousePointerClick size={13} /> Capture a listing
+                    </Link>
+                  ) : (
                     <span className="text-xs text-ink-3">Add listings from the Deals page or the CLI.</span>
+                  )
                   )
                 }
               >
@@ -124,6 +135,12 @@ export default function SourcesPage() {
             );
           })}
         </div>
+      )}
+
+      {finn.data && (
+        <Panel title="FINN" icon={Globe} className="mt-6" subtitle="User-driven discovery — what you have captured and how it scored">
+          <FinnStatus data={finn.data} />
+        </Panel>
       )}
 
       <Panel

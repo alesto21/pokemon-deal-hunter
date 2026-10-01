@@ -18,8 +18,8 @@ region_countries:
   US: ["US"]
   Canada: ["CA"]
 
-# Estimated shipping to Norway per listing (NOK). Used for CardTrader. FINN and web shops use
-# their own shipping (given per listing, or the source default below).
+# Generic fallback shipping per region (NOK) for sources without their own shipping data.
+# NOT used for CardTrader (see cardtrader_costs) — FINN and web shops use their own shipping.
 shipping_nok_by_region:
   EEA: 80
   UK: 140
@@ -27,6 +27,25 @@ shipping_nok_by_region:
   US: 250
   Canada: 250
   other: 300
+
+# CardTrader single-card delivered cost — ESTIMATES, used only when no observed checkout quote
+# exists for the seller (python -m app.cli shipping-quote add …). Cheap item != cheap delivered:
+# observed 2026-10-01, Mew ex 205: $15.90 item + $16.42 shipping + $2.02 fees = $34.34.
+cardtrader_costs:
+  # Direct seller (no CardTrader Zero): one parcel from the seller to Norway.
+  direct_shipping_nok_by_region:
+    EEA: 170          # observed $16.42 (~157 NOK) from Belgium, rounded up
+    UK: 200
+    Switzerland: 200
+    US: 250
+    Canada: 250
+    other: 300
+  # CardTrader Zero sellers: item -> hub is free; the final Zero shipment to Norway is separate.
+  # A single-card purchase carries all of it (basket purchases spread it).
+  zero_shipment_nok: 200
+  # Order fees ~ fixed + % of items (observed: $2.02 on $15.90, $2.15 on $34.94).
+  fees_fixed_nok: 20
+  fees_pct: 0.01
 
 # Import VAT / duty / carrier-handling UNCERTAINTY BUFFER (not a tax calculation).
 # buffer = pct_of_item x item price + fixed_nok. EEA: no buffer beyond shipping (v1 assumption).
@@ -48,6 +67,11 @@ cardtrader:
   exclude_graded: true            # graded flag AND "PSA/BGS/CGC/graded" in the description
   exclude_reverse_holo: true      # reverse holos share the blueprint but are a different product
   one_listing_per_seller: true    # a seller's extra copies never fill the cheapest-N window
+  # Placeholder asks (e.g. 10 000 EUR on a ~35 EUR card) are excluded when above this multiple of
+  # the lower-market cluster (median of the cheapest half of valid listings, max 5). Relative,
+  # never a fixed price. 10x = "wildly above": 5x also hit ordinary bulk spread (0.10 vs 0.60 EUR).
+  # Still visible in cardtrader-debug-card as "absurd ask".
+  absurd_ask_multiple: 10
   track_sets_from_config: true    # sets with cardtrader_track: true in sets.yaml
   extra_expansion_codes: []       # additional CardTrader expansion codes to scan
   evaluate_cheapest_n: 3          # evaluate the N cheapest listings per item as deals
@@ -55,10 +79,15 @@ cardtrader:
 
 finn:
   enabled: true
-  # When a URL is added manually, fetch the page ONCE if robots.txt allows it and
-  # read only its public metadata. Never crawls, never searches, never logs in.
-  fetch_metadata: true
-  estimated_shipping_nok: 0
+  # FINN's robots.txt opens with: "Crawling FINN.no is prohibited unless you have written
+  # permission ... Bruk av automatiserte tjenester ... er ikke tillatt uten eksplisitt samtykke".
+  # So the app never searches or crawls FINN, and by default never fetches FINN pages at all.
+  # Listings come from YOU: the browser capture bookmarklet (/capture), pasted URLs, CSV/JSON.
+  # Set true only if you have FINN's written permission (single page per URL you add).
+  fetch_metadata: false
+  # Shipping when the listing doesn't state it (labelled ESTIMATED). Stated amounts, "fri frakt"
+  # (included) and "kun henting" (pickup) are read from the listing text.
+  estimated_shipping_nok: 99
 
 stores:
   enabled: false

@@ -5,7 +5,7 @@ compares them with current and historical market prices, scores them with a tran
 configurable model, and sends a Telegram message **only** when something is genuinely attractive
 for *your* binders.
 
-- **Sources:** CardTrader (official API, primary pricing), FINN (manual URL / CSV ingestion),
+- **Sources:** CardTrader (official API, primary pricing), FINN (user-driven: browser-capture bookmarklet at `/capture`, pasted URL, CSV — never crawled; see docs/SOURCES.md),
   opt-in Shopify web shops
 - **Scoring:** discount vs a conservative fair value, liquidity, popularity, set desirability,
   trend, grading upside, scarcity, and portfolio/seller/match/lot modifiers
@@ -47,6 +47,10 @@ docker compose exec api python -m app.cli cardtrader-debug-card --set-code TEF -
 docker compose exec api python -m app.cli alert-preview      # read-only: what would alert on a fresh day
 docker compose exec api python -m app.cli purge-mock-data    # after switching from mock to live
 docker compose exec api python -m app.cli reset-price-history  # after a pricing-model change
+docker compose exec api python -m app.cli market-conflict add --blueprint 258698 --reason "website shows offers the API lacks"
+docker compose exec api python -m app.cli market-conflict list     # resolve with: market-conflict resolve <id>
+docker compose exec api python -m app.cli shipping-quote add --seller PokeBilly --shipping 16.42 --fees 2.02 --currency USD --capacity 43
+docker compose exec api python -m app.cli basket-preview <listing_id> --cards 1,2,5,10   # seller-basket economics
 docker compose logs -f worker
 ```
 
@@ -134,16 +138,19 @@ Binder capacities are set in `config/binders.yaml` (`capacity_slots`).
    30-day median, over valid listings only (English, NM, raw, not reverse holo, one per seller).
    Stale expensive asks are ignored, and one cheap listing can't define it. Confidence drops when
    data is thin, dispersed or volatile.
-2. Every listing gets an estimated **landed cost** = item + shipping by seller region + an import
-   buffer for non-EEA sellers (`config/sources.yaml`). Discount, score and recommendation use the
-   landed cost, not the sticker price.
+2. Every listing gets a single-card **landed cost** = item + shipping + fees + import buffer. On
+   CardTrader, shipping depends on the route (direct seller parcel vs CardTrader Zero) and is an
+   **estimate** unless you recorded an observed checkout quote for the seller. Discount, score and
+   recommendation use the landed cost, never the sticker price. Cheap item ≠ cheap delivered.
 3. Score = weighted components + modifiers, which gives a raw **score band**: IGNORE / WATCH /
    GOOD / STRONG BUY / STEAL.
 4. The **effective level** is the band after caps, and it is what the dashboard badge and Telegram
    show. The alert severity is capped by the actual discount (15 / 22 / 30%). An item priced over 45%
    below fair value is capped at STRONG BUY with a "verify listing" warning, because such listings
    are usually stale or mispriced.
-5. Hard filters: seller in `deal_seller_regions` (default EEA only), fair value ≥ 250 NOK, match confidence ≥ 0.9, fair-value confidence ≥ 0.5,
+5. Every alert candidate is **validated live** against the exact CardTrader blueprint just before
+   sending. A stale listing, an endpoint disagreement or an open `market_data_conflict` blocks it.
+6. Hard filters: seller in `deal_seller_regions` (default EEA only), fair value ≥ 250 NOK, match confidence ≥ 0.9, fair-value confidence ≥ 0.5,
    sensible condition, no duplicates without a > 35% discount, no re-alert for the same listing
    **or the same card** without a real price drop, max 5/day (STEAL exempt). Dry-run and live
    alerts are counted separately.

@@ -1,10 +1,11 @@
 "use client";
 
+import { LandedValue } from "./cost";
 import { ExternalLink, ShieldAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge, CardThumb } from "@/components/ui";
 import type { DealRow, EntityBrief } from "@/lib/dashboard";
-import { gainClass, nok, pct } from "@/lib/format";
+import { gainClass, nok, pct, rel } from "@/lib/format";
 
 export function sourceLabel(source: string | null | undefined): string {
   if (!source) return "—";
@@ -42,13 +43,21 @@ export function EntityCell({ entity, fallback, size = "sm", extra }: { entity: E
   );
 }
 
-export function SellerTag({ country, region, source }: { country: string | null; region: string | null; source?: string }) {
+export function SellerTag({ country, region, source, deal }: { country: string | null; region: string | null; source?: string; deal?: DealRow }) {
+  const finn = deal && deal.source === "finn";
   return (
     <div className="min-w-0 text-xs">
       {source && <div className="text-ink-2">{sourceLabel(source)}</div>}
       <div className="text-ink-3">
-        {country ?? "??"} · {region ?? "unknown"}
+        {finn ? deal.location ?? "Norway" : `${country ?? "??"} · ${region ?? "unknown"}`}
       </div>
+      {finn && (
+        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-ink-3">
+          <span title="when this listing was added to Deal Hunter">added {rel(deal.first_seen)}</span>
+          {deal.pickup_required && <span className="rounded bg-amber-500/15 px-1 text-amber-300">pickup</span>}
+          {deal.listing_kind === "lot" && <span className="rounded bg-sky-500/15 px-1 text-sky-300">lot</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -57,9 +66,13 @@ export function SellerTag({ country, region, source }: { country: string | null;
 export function LandedCell({ price }: { price: DealRow["price"] }) {
   return (
     <div className="num text-right">
-      <div className="font-medium text-ink">{nok(price.landed_nok)}</div>
+      <div className="font-medium text-ink">
+        <LandedValue p={price} />
+      </div>
       <div className="text-[11px] text-ink-3">
         {nok(price.item_nok)} + {nok(price.shipping_nok).replace(" NOK", "")}
+        {price.shipping_basis !== "exact" && <span className="text-amber-300"> est</span>}
+        {price.fees_nok > 0 ? ` + ${nok(price.fees_nok).replace(" NOK", "")}` : ""}
         {price.import_buffer_nok > 0 ? ` + ${nok(price.import_buffer_nok).replace(" NOK", "")}` : ""}
       </div>
     </div>

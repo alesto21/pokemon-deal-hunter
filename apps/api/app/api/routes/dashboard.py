@@ -83,6 +83,16 @@ def alerts(db: Session = Depends(get_db), days: int = Query(default=7, ge=1, le=
     return d.alerts(db, days)
 
 
+@router.get("/finn")
+def finn(db: Session = Depends(get_db)) -> dict:
+    return d.finn_summary(db)
+
+
+@router.get("/baskets")
+def baskets(db: Session = Depends(get_db), min_cards: int = Query(default=2, ge=2, le=50)) -> dict:
+    return d.seller_baskets(db, min_cards)
+
+
 @router.get("/system")
 def system(db: Session = Depends(get_db)) -> dict:
     return d.system(db)

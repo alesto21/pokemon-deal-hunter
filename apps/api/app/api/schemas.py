@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -19,6 +19,22 @@ class ManualListingIn(BaseModel):
     condition: str | None = Field(default=None, max_length=64)
     description: str | None = Field(default=None, max_length=4000)
     fetch_metadata: bool | None = None
+
+
+class FinnCaptureIn(BaseModel):
+    """A FINN listing as seen in YOUR browser (bookmarklet / share), confirmed on /capture."""
+
+    url: HttpUrl
+    title: str = Field(max_length=500)
+    price: float = Field(ge=0, le=10_000_000)
+    description: str | None = Field(default=None, max_length=8000)
+    shipping_nok: float | None = Field(default=None, ge=0, le=100_000)  # set = exact
+    location: str | None = Field(default=None, max_length=120)
+    seller: str | None = Field(default=None, max_length=200)
+    seller_type: Literal["private", "business"] | None = None
+    published_at: datetime | None = None
+    image_urls: list[HttpUrl] = Field(default_factory=list, max_length=20)
+    condition: str | None = Field(default=None, max_length=64)
 
 
 class ListingPatch(BaseModel):

@@ -20,7 +20,7 @@ from app.pricing.history import HistoryStats
 
 # Bump whenever the valuation logic changes: stored evaluations from an older model are
 # re-evaluated on the next scan instead of lingering on the dashboard.
-FAIR_VALUE_MODEL_VERSION = "executable-v6-landed"
+FAIR_VALUE_MODEL_VERSION = "executable-v8-delivered-cost"
 
 
 @dataclass

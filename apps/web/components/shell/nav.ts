@@ -7,6 +7,7 @@ import {
   Eye,
   LayoutDashboard,
   List,
+  MousePointerClick,
   type LucideIcon,
   Package,
   RadioTower,
@@ -47,6 +48,7 @@ export const NAV: { section: string | null; items: NavItem[] }[] = [
       { href: "/market", label: "Market", icon: TrendingUp },
       { href: "/alerts", label: "Alerts", icon: Bell },
       { href: "/listings", label: "Listings", icon: List },
+      { href: "/capture", label: "Capture FINN", icon: MousePointerClick },
     ],
   },
   {

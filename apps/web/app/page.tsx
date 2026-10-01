@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Eye, LayoutDashboard, RefreshCw, Tag, Wallet } from "lucide-react";
+import { Bell, Eye, Globe, LayoutDashboard, RefreshCw, Tag, Wallet } from "lucide-react";
 import Link from "next/link";
 import { BestDeals } from "@/components/overview/BestDeals";
 import { SystemStrip } from "@/components/overview/SystemStrip";
@@ -10,10 +10,12 @@ import { KindBreakdown, PortfolioKpis } from "@/components/portfolio/PortfolioKp
 import { btnGhost, EmptyState, ErrorBox, KpiCard, Loading, PageHeader, Panel } from "@/components/ui";
 import { useApi } from "@/lib/api";
 import { day } from "@/lib/format";
-import type { Overview } from "@/lib/dashboard";
+import type { FinnSummary, Overview } from "@/lib/dashboard";
+import { FinnStatus } from "@/components/finn/FinnStatus";
 
 export default function OverviewPage() {
   const { data, error, loading, reload } = useApi<Overview>("dashboard/overview");
+  const finn = useApi<FinnSummary>("dashboard/finn");
   const p = data?.portfolio;
   const hasHoldings = (p?.summary.item_count ?? 0) > 0;
 
@@ -24,7 +26,7 @@ export default function OverviewPage() {
         icon={LayoutDashboard}
         subtitle="Your collection, live deals and the scanner at a glance"
         actions={
-          <button className={btnGhost} onClick={reload} disabled={loading}>
+          <button className={btnGhost} onClick={() => { reload(); finn.reload(); }} disabled={loading}>
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
         }
@@ -55,6 +57,13 @@ export default function OverviewPage() {
           >
             <BestDeals best={data.best_deals} near={data.near_deals} />
           </Panel>
+
+          {finn.data && (
+            <Panel title="FINN" icon={Globe} subtitle="Listings you captured from FINN"
+              actions={<Link href="/capture" className="text-xs text-ink-3 hover:text-ink">Capture →</Link>}>
+              <FinnStatus data={finn.data} compact />
+            </Panel>
+          )}
 
           {hasHoldings ? (
             <>

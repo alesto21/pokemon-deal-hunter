@@ -38,7 +38,19 @@ export interface DealRow {
   listing_kind: string;
   status: string;
   entity: EntityBrief | null;
-  price: { asking: number; currency: string; item_nok: number; shipping_nok: number; import_buffer_nok: number; landed_nok: number };
+  price: {
+    asking: number;
+    currency: string;
+    item_nok: number;
+    shipping_nok: number;
+    shipping_basis: "exact" | "estimated" | string; // exact = seller-stated / observed checkout quote
+    fees_nok: number;
+    fees_basis: "exact" | "estimated" | string;
+    import_buffer_nok: number;
+    landed_nok: number; // item + shipping + fees + import buffer — single-card delivered cost
+    landed_cost_confidence: number | null;
+    purchase_route: "direct" | "zero" | null | string; // CardTrader only
+  };
   fair_value_nok: number | null;
   fair_value_low: number | null;
   fair_value_high: number | null;
@@ -55,6 +67,30 @@ export interface DealRow {
   trend_30d: number | null;
   evaluated_at: string;
   binder_fit: string | null;
+  first_seen: string;
+  published_at: string | null;
+  location: string | null;
+  pickup_required: boolean;
+  safety_flags: string[];
+  capture_method: string | null; // manual | csv | capture | null (scanned sources)
+  lot: { coverage: number | null; unidentified: number | null } | null;
+}
+
+export interface FinnSummary {
+  discovery: { automated: boolean; reason: string; channels: string[] };
+  counts: {
+    total: number;
+    added_today: number;
+    active: number;
+    matched: number;
+    needs_review: number;
+    lots: number;
+    pickup_only: number;
+    by_capture_method: Record<string, number>;
+    last_added: string | null;
+  };
+  best: DealRow[];
+  newest: DealRow[];
 }
 
 export interface MarketBrief {
