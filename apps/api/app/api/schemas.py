@@ -64,7 +64,7 @@ class PortfolioIn(BaseModel):
     acquisition_date: date | None = None
     binder_type: BinderLiteral = "regular"
     condition: str | None = Field(default="Near Mint", max_length=32)
-    grading_status: Literal["raw", "submitted", "graded"] = "raw"
+    grading_status: Literal["raw", "submitted", "at_grader", "graded"] = "raw"
     grade_company: str | None = Field(default=None, max_length=16)
     psa_grade: float | None = Field(default=None, ge=1, le=10)
     notes: str | None = Field(default=None, max_length=2000)
@@ -76,7 +76,7 @@ class PortfolioPatch(BaseModel):
     acquisition_date: date | None = None
     binder_type: BinderLiteral | None = None
     condition: str | None = None
-    grading_status: Literal["raw", "submitted", "graded"] | None = None
+    grading_status: Literal["raw", "submitted", "at_grader", "graded"] | None = None
     grade_company: str | None = None
     psa_grade: float | None = Field(default=None, ge=1, le=10)
     notes: str | None = None

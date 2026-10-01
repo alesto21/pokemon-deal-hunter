@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI
 from app.api.deps import require_api_key
 from app.api.routes import (
     catalog,
+    dashboard,
     deals,
     health,
     listings,
@@ -30,7 +31,7 @@ def create_app() -> FastAPI:
                   docs_url="/docs" if s.environment != "production" else None, redoc_url=None)
     app.include_router(health.router)
     protected = [Depends(require_api_key)]
-    for module in (deals, listings, catalog, portfolio, watchlist, prices, sources, settings, lots):
+    for module in (deals, listings, catalog, portfolio, watchlist, prices, sources, settings, lots, dashboard):
         app.include_router(module.router, prefix="/api/v1", dependencies=protected)
     return app
 

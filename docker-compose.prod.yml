@@ -14,6 +14,11 @@ services:
     logging: *logging
     # API only needs to be reachable by the web container in production.
     ports: !reset []
+    # Read-only view of the backup folder so the System page can show backup status.
+    environment:
+      BACKUP_DIR: /backups
+    volumes:
+      - ./backups:/backups:ro
   worker:
     logging: *logging
   web:

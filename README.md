@@ -105,16 +105,28 @@ export DATABASE_URL=sqlite:///./dev.db
 .venv/bin/uvicorn app.api.main:app --reload            # http://localhost:8000/docs
 .venv/bin/python -m app.worker                          # scheduler
 .venv/bin/python -m pytest && .venv/bin/ruff check app tests
+cd ../web && npm test && npm run lint && npm run build   # frontend unit tests (Node test runner), lint, build
 
 cd ../web && npm install && API_INTERNAL_URL=http://localhost:8000 npm run dev
 ```
 
 ## Dashboard
 
-Overview · Deals (badge = effective level after caps, raw score shown separately; expand a row for
-band → level → caps, landed-cost breakdown and the notification decision; filters, add/import FINN
-listings, lots) · Watchlist · Portfolio ·
-Price history · Match review · Sources · Collector health · Settings.
+A private, dark-first command center (desktop, tablet and iPhone). Open it via Tailscale, and
+never expose it publicly.
+
+| Group | Pages |
+|---|---|
+| — | **Overview**: portfolio KPIs (value, cost, P/L, raw/graded/sealed), best deals right now, scanner status, portfolio charts |
+| Trading | **Deals** (filters, deal detail: price → market → decision), **Watchlist** (targets, best listing, sparkline), **Portfolio** (holdings, add/edit) |
+| Collection | **GOD Binder** (216 pockets), **Collection** (360 pockets), **Sealed** (per-pack economics, rip/hold scores), **Grading** (candidates → submitted → at grader → returned; PSA 9/10 economics) |
+| Market | **Market** (coverage, movers, liquidity, strongest discounts, price chart per card), **Alerts** (sent + held back with reasons), **Listings** (browse + match review) |
+| System | **Sources**, **System** (worker, lock, database, Telegram, backups, FX), **Settings** |
+
+Badges always show the **effective level** (after caps); the raw score and band are shown
+separately. Every number is real. Where history or PSA data does not exist yet, pages say so
+instead of estimating. On phones there is a bottom tab bar, and tables become cards.
+Binder capacities are set in `config/binders.yaml` (`capacity_slots`).
 
 ## How alerts are decided (short version)
 

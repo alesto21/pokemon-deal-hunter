@@ -1,5 +1,42 @@
 # Development log
 
+## 2026-10-01 — Advanced collector dashboard
+
+### Built
+- **Read models** (`services/dashboard.py`, `/api/v1/dashboard/*`, read-only): overview,
+  deals + deal detail, portfolio (+ holdings), binder (premium/regular), sealed, grading,
+  watchlist, market + per-card series, alerts (sent + held back), system. One call per page.
+  Nothing is fabricated: history/PSA/prices that don't exist are `null` / `ready: false`.
+- **Dashboard** (Next.js, dark-first): new shell with grouped navigation (Overview · Trading ·
+  Collection · Market · System), a phone bottom tab bar + drawer, and a live scanner status pill.
+  Shared UI kit (`components/ui.tsx`): KPI cards, effective-level badges, responsive DataTable
+  (cards on phones), card thumbnails (CardTrader previews), empty/"history is being collected"
+  states. One validated chart palette (`lib/chart.ts`).
+- Pages: Overview, Deals (+ detail sheet), Watchlist, Portfolio, GOD Binder (216-pocket map),
+  Collection (360), Sealed, Grading, Market, Alerts, Listings (+ match review), Sources,
+  System, Settings. `/prices` → `/market`, `/review` → `/listings?tab=review`,
+  `/health` → `/system` redirect.
+- Config: `binders.yaml` `capacity_slots` (216 / 360). Grading status `at_grader` added.
+  The prod overlay mounts `./backups` read-only into the API for backup status.
+- Tests: backend 178 (dashboard read models incl. no-fabrication rules), frontend `npm test`
+  (formatting: NOK, %, dates, relative UTC times).
+
+### Bugs found and fixed
+- **Daily price history was empty despite 20k snapshots.** Containers run in Europe/Oslo;
+  `aggregate_day(date.today())` used the local date while snapshots are UTC, so scans between
+  00:00 and 02:00 local built nothing, and the 7/30/90-day windows were shifted by a day. Now
+  UTC days everywhere in price history (`utc_today`), with a regression test that fails on the
+  old code at any hour.
+- `/system` `overall_ok` treated a stopped worker as operational → now requires a scheduled scan.
+
+### Found, not changed (fair-value logic is frozen)
+- **Thin market with a placeholder ask:** with exactly 2 valid listings, the cheapest-3 median
+  is their average. Live example: Paldea Friends Mini Tins with asks of 221 NOK and ~109,000 NOK
+  → fair value 54,627 NOK (confidence 0.36). No alert is possible (confidence < 0.5 → IGNORE),
+  and the dashboard's "strongest discounts" now only shows fair values with confidence ≥ 0.5.
+  Proposed fix for a future pricing change: with < 3 listings, ignore asks > 3× the lowest, or
+  use the lower ask plus a wide band.
+
 ## 2026-10-01 — Scan-lock ownership, graceful worker shutdown, stale-lock recovery, overdue detection
 
 ### Problem

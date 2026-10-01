@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
@@ -16,6 +16,13 @@ NAMING = {
 
 def utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def utc_today() -> date:
+    """Price-history days are UTC days (snapshots are stored in UTC). Never use date.today() for
+    them: containers run in Europe/Oslo, and the local date is a day ahead between 00:00 and
+    02:00, which previously made scans in that window aggregate the wrong day."""
+    return datetime.now(UTC).date()
 
 
 class Base(DeclarativeBase):

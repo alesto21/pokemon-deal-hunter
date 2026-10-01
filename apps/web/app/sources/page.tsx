@@ -1,36 +1,54 @@
 "use client";
 
+import { Globe, Play, RadioTower, RefreshCw, Store, type LucideIcon } from "lucide-react";
 import { useState } from "react";
-import RunsTable from "@/components/RunsTable";
-import { ErrorBox, HealthDot, Loading, PageHeader, Panel, btn } from "@/components/ui";
+import RunsTable from "@/components/sources/RunsTable";
+import StatusCard, { type Status } from "@/components/system/StatusCard";
+import { LockRows, NextScan, fmtSeconds } from "@/components/system/WorkerRows";
+import { ErrorBox, Field, Loading, PageHeader, Panel, Segmented, btn } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
-import { dt, pct } from "@/lib/format";
+import { dt, pct, rel } from "@/lib/format";
 import type { CollectorRun, SourceHealth } from "@/lib/types";
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex justify-between gap-3 py-0.5 text-sm">
-      <span className="text-zinc-500">{label}</span>
-      <span className="text-right tabular-nums">{value}</span>
-    </div>
-  );
+const META: Record<string, { title: string; icon: LucideIcon; blurb: string }> = {
+  cardtrader: { title: "CardTrader", icon: RadioTower, blurb: "Official API · primary pricing and listings" },
+  finn: { title: "FINN", icon: Globe, blurb: "Manual URL / CSV ingestion only — never crawled" },
+  stores: { title: "Web shops", icon: Store, blurb: "Public Shopify products.json · opt-in per shop" },
+};
+
+function status(s: SourceHealth): { status: Status; label: string } {
+  if (!s.enabled) return { status: "off", label: "Disabled" };
+  if (s.worker?.next_scan_overdue) return { status: "bad", label: "Worker overdue" };
+  if (s.healthy === false) return { status: "bad", label: "Unhealthy" };
+  if (s.kind === "manual") return { status: "ok", label: "Ready" };
+  if (s.running) return { status: "ok", label: "Scanning" };
+  return { status: "ok", label: "Healthy" };
 }
+
+function modeText(s: SourceHealth) {
+  if (s.kind === "manual") return "Manual";
+  return s.mode === "mock" ? "Mock data" : s.mode === "live" ? "Live" : s.mode;
+}
+
+const n = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString("nb-NO").replace(/ | /g, " "));
 
 export default function SourcesPage() {
   const { data, error, loading, reload } = useApi<SourceHealth[]>("sources");
-  const runs = useApi<CollectorRun[]>("sources/cardtrader/runs?limit=20");
+  const [runSource, setRunSource] = useState<"cardtrader" | "stores">("cardtrader");
+  const runs = useApi<CollectorRun[]>(`sources/${runSource}/runs?limit=25`);
   const [msg, setMsg] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function runNow(source: string) {
     setActionError(null);
+    setMsg(null);
     try {
       await api(`sources/${source}/run`, { method: "POST" });
-      setMsg(`Queued ${source} — refresh in a moment.`);
+      setMsg(`Scan of ${META[source]?.title ?? source} queued — results appear in a moment.`);
       setTimeout(() => {
         reload();
         runs.reload();
-      }, 3000);
+      }, 4000);
     } catch (e) {
       setActionError((e as Error).message);
     }
@@ -40,88 +58,91 @@ export default function SourcesPage() {
     <>
       <PageHeader
         title="Sources"
-        subtitle="Collector configuration and health. FINN is manual URL ingestion only — it is never crawled."
-        actions={<button className={btn} onClick={() => { reload(); runs.reload(); }}>Refresh</button>}
+        icon={RadioTower}
+        subtitle="Where listings and prices come from, and how each collector is doing."
+        actions={
+          <button
+            className={btn}
+            onClick={() => {
+              reload();
+              runs.reload();
+            }}
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+        }
       />
       <ErrorBox error={error ?? actionError} />
-      {msg && <div className="mb-4 text-sm text-emerald-700 dark:text-emerald-400">{msg}</div>}
+      {msg && <div className="mb-4 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{msg}</div>}
       <Loading show={loading && !data} />
+
       {data && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {data.map((s) => (
-            <Panel
-              key={s.source}
-              title={s.source}
-              actions={
-                <span className="flex items-center gap-2 text-xs text-zinc-500">
-                  <HealthDot healthy={s.healthy} />
-                  {s.healthy === null ? "disabled" : s.healthy ? "healthy" : "unhealthy"}
-                  {s.running && !s.worker.next_scan_overdue && " · running"}
-                  {s.worker.next_scan_overdue && (
-                    <span className="rounded bg-red-600 px-1.5 py-0.5 font-semibold text-white">WORKER OVERDUE</span>
-                  )}
-                </span>
-              }
-            >
-              <Row label="Mode" value={s.mode} />
-              <Row label="Type" value={s.kind} />
-              <Row label="Enabled" value={s.enabled ? "yes" : "no"} />
-              <Row label="Interval" value={s.interval_minutes ? `${s.interval_minutes} min` : "—"} />
-              <Row label="Last successful scan" value={dt(s.worker.last_successful_scan)} />
-              {s.kind === "scheduled" && (
-                <>
-                  <Row
-                    label="Next scheduled scan"
-                    value={
-                      s.worker.next_scan_overdue ? (
-                        <span className="font-semibold text-red-600 dark:text-red-400">
-                          OVERDUE {Math.round((s.worker.next_scan_overdue_seconds ?? 0) / 60)} min (was due{" "}
-                          {dt(s.worker.next_scheduled_scan)})
-                        </span>
-                      ) : s.worker.next_scheduled_scan ? (
-                        dt(s.worker.next_scheduled_scan)
-                      ) : s.enabled ? (
-                        "not scheduled (worker stopped)"
-                      ) : (
-                        "—"
-                      )
-                    }
-                  />
-                  <Row
-                    label="Scan lock"
-                    value={
-                      !s.scan_lock.locked
-                        ? "free"
-                        : s.scan_lock.stale
-                          ? `STALE (heartbeat ${Math.round(s.scan_lock.heartbeat_age_seconds ?? 0)} s ago)`
-                          : `held ${Math.round(s.scan_lock.age_seconds ?? 0)} s`
-                    }
-                  />
-                  {s.scan_lock.locked && (
-                    <div className="truncate text-right text-xs text-zinc-500" title={s.scan_lock.owner ?? ""}>
-                      {s.scan_lock.owner} · since {dt(s.scan_lock.acquired_at)}
-                    </div>
-                  )}
-                </>
-              )}
-              <Row label="Last failure" value={dt(s.last_failure)} />
-              <Row label="Consecutive failures" value={s.consecutive_failures} />
-              <Row label="Runs (24h)" value={s.runs_24h} />
-              <Row label="Error rate (24h)" value={pct(s.error_rate_24h, 0)} />
-              <Row label="Last duration" value={s.last_duration_ms !== null ? `${(s.last_duration_ms / 1000).toFixed(1)} s` : "—"} />
-              <Row label="Fetched / matched" value={`${s.last_items_fetched ?? "—"} / ${s.last_items_matched ?? "—"}`} />
-              {s.last_error && <div className="mt-2 break-words rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">{s.last_error}</div>}
-              {s.kind === "scheduled" && (
-                <button className={`${btn} mt-3`} disabled={!s.enabled || s.running} onClick={() => runNow(s.source)}>
-                  Run now
-                </button>
-              )}
-            </Panel>
-          ))}
+        <div className="grid gap-4 lg:grid-cols-3">
+          {data.map((s) => {
+            const meta = META[s.source] ?? { title: s.source, icon: RadioTower, blurb: "" };
+            const st = status(s);
+            const scheduled = s.kind === "scheduled";
+            return (
+              <StatusCard
+                key={s.source}
+                title={meta.title}
+                icon={meta.icon}
+                status={st.status}
+                statusLabel={st.label}
+                footer={
+                  scheduled ? (
+                    <button className={btn} disabled={!s.enabled || s.running} onClick={() => runNow(s.source)}>
+                      <Play size={13} /> {s.running ? "Scan running…" : "Run now"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-ink-3">Add listings from the Deals page or the CLI.</span>
+                  )
+                }
+              >
+                <p className="mb-1.5 text-xs text-ink-3">{meta.blurb}</p>
+                <Field label="Enabled" value={s.enabled ? "Yes" : "No"} />
+                <Field label="Mode" value={modeText(s)} />
+                {scheduled && <Field label="Interval" value={s.interval_minutes ? `every ${s.interval_minutes} min` : "—"} />}
+                <Field label="Last success" value={s.last_success ? <span title={dt(s.last_success)}>{rel(s.last_success)}</span> : "—"} />
+                <Field label="Last failure" value={s.last_failure ? <span title={dt(s.last_failure)}>{rel(s.last_failure)}</span> : "never"} />
+                {scheduled && (
+                  <>
+                    <Field label="Next scan" value={<NextScan worker={s.worker} enabled={s.enabled} />} />
+                    <LockRows lock={s.scan_lock} />
+                    <Field label="Runs (24h)" value={s.runs_24h} />
+                    <Field
+                      label="Error rate (24h)"
+                      value={<span className={s.error_rate_24h ? "text-loss" : ""}>{pct(s.error_rate_24h, 0)}</span>}
+                    />
+                    <Field label="Consecutive failures" value={s.consecutive_failures} />
+                    <Field label="Last scan listings" value={`${n(s.last_items_fetched)} fetched · ${n(s.last_items_matched)} valid`} />
+                    <Field label="Last duration" value={s.last_duration_ms !== null ? fmtSeconds(s.last_duration_ms / 1000) : "—"} />
+                  </>
+                )}
+                {s.last_error && <p className="mt-2 break-words rounded-lg bg-loss/10 p-2 text-xs text-rose-200">{s.last_error}</p>}
+              </StatusCard>
+            );
+          })}
         </div>
       )}
-      <Panel title="Recent CardTrader runs" className="mt-6">
+
+      <Panel
+        title="Recent runs"
+        className="mt-6"
+        bodyClassName="p-2 sm:p-3"
+        actions={
+          <Segmented
+            value={runSource}
+            onChange={setRunSource}
+            options={[
+              { value: "cardtrader", label: "CardTrader" },
+              { value: "stores", label: "Web shops" },
+            ]}
+          />
+        }
+      >
         <ErrorBox error={runs.error} />
+        <Loading show={runs.loading && !runs.data} />
         {runs.data && <RunsTable runs={runs.data} />}
       </Panel>
     </>

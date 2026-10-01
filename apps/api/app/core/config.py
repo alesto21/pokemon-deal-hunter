@@ -151,8 +151,8 @@ class BinderModifiers(BaseModel):
 
 
 class BindersConfig(BaseModel):
-    premium: dict[str, float] = {"min_raw_value_nok": 400, "preferred_max_buy_nok": 1500}
-    regular: dict[str, float] = {"min_raw_value_nok": 50}
+    premium: dict[str, float] = {"min_raw_value_nok": 400, "preferred_max_buy_nok": 1500, "capacity_slots": 216}
+    regular: dict[str, float] = {"min_raw_value_nok": 50, "capacity_slots": 360}
     modifiers: BinderModifiers = BinderModifiers()
 
 

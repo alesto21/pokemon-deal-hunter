@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.db.base import utcnow
+from app.db.base import utc_today, utcnow
 from app.db.models import CollectorRun, PriceDaily, PriceSnapshot
 from app.pricing.stats import PriceStats
 
@@ -97,7 +97,7 @@ def aggregate_day(session: Session, day: date, entities: set[tuple[str, int]] | 
 def daily_series(session: Session, entity_type: str, entity_id: int, days: int | None = 90) -> list[PriceDaily]:
     q = select(PriceDaily).where(PriceDaily.entity_type == entity_type, PriceDaily.entity_id == entity_id)
     if days:
-        q = q.where(PriceDaily.day >= date.today() - timedelta(days=days))
+        q = q.where(PriceDaily.day >= utc_today() - timedelta(days=days))
     return list(session.scalars(q.order_by(PriceDaily.day)).all())
 
 
@@ -107,7 +107,7 @@ def daily_price(row: PriceDaily) -> float | None:
 
 
 def _window_median(series: list[PriceDaily], days: int) -> tuple[float | None, int]:
-    cutoff = date.today() - timedelta(days=days)
+    cutoff = utc_today() - timedelta(days=days)
     vals = [daily_price(r) for r in series if r.day >= cutoff]
     vals = [v for v in vals if v]
     return (round(statistics.median(vals), 2) if vals else None), len(vals)
@@ -123,7 +123,7 @@ def compute_history_stats(series: list[PriceDaily]) -> HistoryStats:
     h.median_90d, _ = _window_median(series, 90)
     all_vals = [v for v in (daily_price(r) for r in series) if v]
     h.median_all = round(statistics.median(all_vals), 2) if all_vals else None
-    cutoff = date.today() - timedelta(days=30)
+    cutoff = utc_today() - timedelta(days=30)
     window = [r for r in series if r.day >= cutoff and daily_price(r)]
     prices = [float(daily_price(r)) for r in window]  # type: ignore[arg-type]
     if len(prices) >= 5:
@@ -142,7 +142,7 @@ def apply_retention(session: Session, raw_days: int, run_days: int) -> dict[str,
     oldest = session.scalar(select(func.min(PriceSnapshot.timestamp)))
     if oldest:
         d = oldest.date()
-        while d <= date.today():
+        while d <= utc_today():
             aggregate_day(session, d)
             d += timedelta(days=1)
     cutoff = utcnow() - timedelta(days=raw_days)

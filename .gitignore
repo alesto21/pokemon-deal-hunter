@@ -16,6 +16,7 @@ __pycache__/
 # node
 node_modules/
 .next/
+.next-*/
 out/
 
 # runtime data

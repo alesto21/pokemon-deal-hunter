@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.collectors.base import Collector
 from app.core.config import get_user_config
 from app.core.logging import get_logger, redact_text
-from app.db.base import utcnow
+from app.db.base import utc_today, utcnow
 from app.db.models import Alert, CollectorRun, Listing, ListingStatus, SourceStatus
 from app.db.session import session_scope
 from app.notifications.telegram import TelegramNotifier
@@ -75,7 +74,7 @@ def _run_locked(source: str, factory: Callable[[], Collector], send_alerts: bool
                 deals += ev.alert_level in ("GOOD", "STRONG_BUY", "STEAL")
                 alerts += bool(decision and decision.notify)
             _mark_gone(s, source, started)
-            aggregate_day(s, date.today())
+            aggregate_day(s, utc_today())
             duration = int((time.monotonic() - t0) * 1000)
             s.add(CollectorRun(source=source, started_at=started, finished_at=utcnow(), success=True,
                                duration_ms=duration, items_fetched=result.fetched, items_matched=result.matched,

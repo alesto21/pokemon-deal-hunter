@@ -1,8 +1,11 @@
 "use client";
 
+import { ArrowLeft, ExternalLink, Layers, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { use, useState, type FormEvent } from "react";
+import { sourceLabel } from "@/components/deals/bits";
 import EntitySearch, { type EntityPick } from "@/components/EntitySearch";
-import { Empty, ErrorBox, Loading, PageHeader, Panel, RecBadge, StatTile, btn, btnPrimary, input, td, th } from "@/components/ui";
+import { Badge, Empty, EmptyState, ErrorBox, KpiCard, LevelBadge, Loading, PageHeader, Panel, btn, btnDanger, btnGhost, btnPrimary, input, td, th } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import { nok, num, pct } from "@/lib/format";
 import type { ListingDetail, Lot } from "@/lib/types";
@@ -64,19 +67,41 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
 
   return (
     <>
-      <PageHeader title="Lot / collection breakdown" subtitle="Mark the cards in a lot manually to get an estimated and conservative lot value. Image recognition is planned for phase 2." />
+      <PageHeader
+        title="Lot breakdown"
+        icon={Layers}
+        subtitle="Mark the cards in a lot manually to get an estimated and a conservative lot value. Image recognition is planned for phase 2."
+        actions={
+          valid ? (
+            <Link className={btnGhost} href={`/deals?listing=${listingId}`}>
+              <ArrowLeft size={14} /> Deal detail
+            </Link>
+          ) : undefined
+        }
+      />
       <ErrorBox error={listing.error ?? actionError} />
       <Loading show={listing.loading && !l} />
       {l && (
         <div className="space-y-6">
-          <Panel title={l.title} actions={l.url ? <a className={btn} href={l.url} target="_blank" rel="noopener noreferrer">Open listing ↗</a> : undefined}>
-            <div className="flex flex-wrap gap-4 text-sm">
-              <span>Landed cost <b className="tabular-nums">{nok(l.landed_cost_nok)}</b></span>
-              <span>Source {l.source}</span>
-              <span>Kind {l.listing_kind}</span>
+          <Panel
+            title={l.title}
+            actions={
+              l.url ? (
+                <a className={btn} href={l.url} target="_blank" rel="noopener noreferrer">
+                  Open listing <ExternalLink size={14} />
+                </a>
+              ) : undefined
+            }
+          >
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
+              <span>
+                Landed cost <b className="num text-ink">{nok(l.landed_cost_nok)}</b>
+              </span>
+              <span>Source {sourceLabel(l.source)}</span>
+              <Badge>{l.listing_kind}</Badge>
               {l.evaluation && (
                 <span className="flex items-center gap-2">
-                  Score <b>{num(l.evaluation.total_score)}</b> <RecBadge rec={l.evaluation.alert_level} /> discount {pct(l.evaluation.discount_pct)}
+                  Score <b className="num text-ink">{num(l.evaluation.total_score, 1)}</b> <LevelBadge level={l.evaluation.alert_level} /> discount {pct(l.evaluation.discount_pct)}
                 </span>
               )}
             </div>
@@ -84,18 +109,25 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
 
           {!lot ? (
             <Panel>
-              <p className="mb-3 text-sm">This listing has no lot breakdown yet. Creating one marks it as a lot and values it from the items you add.</p>
-              <button className={btnPrimary} onClick={() => run(() => api("lots", { method: "POST", json: { listing_id: l.id } }))}>
-                Create lot
-              </button>
+              <EmptyState
+                icon={Layers}
+                title="No lot breakdown yet"
+                action={
+                  <button className={btnPrimary} onClick={() => run(() => api("lots", { method: "POST", json: { listing_id: l.id } }))}>
+                    Create lot
+                  </button>
+                }
+              >
+                Creating one marks this listing as a lot and values it from the items you add.
+              </EmptyState>
             </Panel>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <StatTile label="Estimated value" value={nok(lot.valuation.estimated_value_nok)} />
-                <StatTile label="Conservative value" value={nok(lot.valuation.conservative_value_nok)} hint="low fair values × liquidity haircut" />
-                <StatTile label="Priced items" value={`${lot.valuation.priced_items} / ${lot.valuation.total_items}`} />
-                <StatTile
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <KpiCard label="Estimated value" value={nok(lot.valuation.estimated_value_nok)} />
+                <KpiCard label="Conservative value" value={nok(lot.valuation.conservative_value_nok)} tone="gold" hint="low fair values × liquidity haircut" />
+                <KpiCard label="Priced items" value={`${lot.valuation.priced_items} / ${lot.valuation.total_items}`} />
+                <KpiCard
                   label="Price vs conservative"
                   value={lot.valuation.conservative_value_nok ? pct((lot.valuation.conservative_value_nok - l.landed_cost_nok) / lot.valuation.conservative_value_nok) : "—"}
                   hint="positive = below value"
@@ -107,7 +139,7 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
                     <Empty>No items yet.</Empty>
                   ) : (
                     <table className="w-full">
-                      <thead className="border-b border-zinc-200 dark:border-zinc-800">
+                      <thead className="border-b border-line">
                         <tr>
                           <th className={th}>Item</th>
                           <th className={`${th} text-right`}>Qty</th>
@@ -117,13 +149,13 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
                       </thead>
                       <tbody>
                         {lot.valuation.lines.map((line) => (
-                          <tr key={line.id} className="border-b border-zinc-100 dark:border-zinc-900">
+                          <tr key={line.id} className="border-b border-line/60">
                             <td className={td}>{line.label ?? (line.card_id ? `card #${line.card_id}` : `product #${line.product_id}`)}</td>
-                            <td className={`${td} text-right tabular-nums`}>{line.quantity}</td>
-                            <td className={`${td} text-right tabular-nums`}>{nok(line.unit_value_nok)}</td>
+                            <td className={`${td} text-right num`}>{line.quantity}</td>
+                            <td className={`${td} text-right num`}>{nok(line.unit_value_nok)}</td>
                             <td className={`${td} text-right`}>
-                              <button className="text-xs text-red-600" onClick={() => run(() => api(`lots/${lot.id}/items/${line.id}`, { method: "DELETE" }))}>
-                                remove
+                              <button className={btnDanger} aria-label="Remove item" onClick={() => run(() => api(`lots/${lot.id}/items/${line.id}`, { method: "DELETE" }))}>
+                                <Trash2 size={12} />
                               </button>
                             </td>
                           </tr>
@@ -131,12 +163,14 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
                       </tbody>
                     </table>
                   )}
-                  <form onSubmit={addItem} className="mt-4 space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-                    <div className="text-sm font-medium">Add item</div>
+                  <form onSubmit={addItem} className="mt-4 space-y-2 border-t border-line pt-4">
+                    <div className="text-sm font-medium text-ink">Add item</div>
                     {pick ? (
-                      <div className="flex items-center justify-between rounded-md border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700">
+                      <div className="flex items-center justify-between rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-sm">
                         <span>{pick.label}</span>
-                        <button type="button" className="text-xs text-zinc-500" onClick={() => setPick(null)}>change</button>
+                        <button type="button" className="text-xs text-ink-3 hover:text-ink" onClick={() => setPick(null)}>
+                          change
+                        </button>
                       </div>
                     ) : (
                       <EntitySearch onPick={setPick} placeholder="Catalogue card/product (optional)…" />
@@ -158,16 +192,20 @@ export default function LotPage({ params }: { params: Promise<{ listingId: strin
                       {lot.images.map((name) => (
                         <a key={name} href={`/api/proxy/lots/${lot.id}/images/${name}`} target="_blank" rel="noopener noreferrer">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={`/api/proxy/lots/${lot.id}/images/${name}`} alt="lot" className="aspect-square w-full rounded object-cover" />
+                          <img src={`/api/proxy/lots/${lot.id}/images/${name}`} alt="lot" className="aspect-square w-full rounded-lg border border-line object-cover" />
                         </a>
                       ))}
                     </div>
                   )}
                   <form onSubmit={upload} className="mt-4 flex flex-wrap items-center gap-2">
-                    <input type="file" accept="image/jpeg,image/png,image/webp" className="text-sm" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="min-w-0 flex-1 text-sm text-ink-2 file:mr-3 file:rounded-lg file:border file:border-line file:bg-surface-3 file:px-3 file:py-1.5 file:text-ink"
+                      onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
                     <button className={btn} disabled={!file}>Upload</button>
                   </form>
-                  <p className="mt-2 text-xs text-zinc-500">JPEG/PNG/WebP, max 10 MB. Stored on the server&apos;s data volume.</p>
+                  <p className="mt-2 text-xs text-ink-3">JPEG/PNG/WebP, max 10 MB. Stored on the server&apos;s data volume.</p>
                 </Panel>
               </div>
             </>

@@ -56,6 +56,27 @@ would only add `sys.path` hacks or several pip packages. They are subpackages of
 with the same boundaries. Collectors stay isolated from each other: a collector only produces
 `RawListing`s and snapshots, and nothing else imports a specific collector.
 
+## Dashboard read models (`services/dashboard.py`, `/api/v1/dashboard/*`)
+
+Every dashboard page makes one call to a read-only aggregation endpoint: `overview`, `deals` (+
+`deals/{listing_id}`), `portfolio`, `binder/{premium|regular}`, `sealed`, `grading`,
+`watchlist`, `market` (+ `market/series/{type}/{id}`), `alerts` and `system`. They only *read*.
+Values come from the database or from existing domain functions (fair value, grading economics,
+sealed analysis, effective level), so the UI never re-implements pricing.
+
+* **No fabricated data:** where history, a PSA reference or a market price does not exist, the
+  field is `null` / `ready: false` and the UI shows an empty state. Movers need ≥2 collected
+  days. Portfolio charts need ≥2 non-empty daily snapshots. Fair value "over time" is the daily
+  median of the fair values the scorer actually stored on evaluations.
+* Badges, filters and counts use the **effective level** (after caps).
+* Binder capacities come from `config/binders.yaml` (`capacity_slots`: GOD 216, regular 360).
+  Grading workflow statuses: `raw` (candidate) → `submitted` → `at_grader` → `graded` (returned).
+* The System page reads backup status from `BACKUP_DIR`. The prod overlay mounts `./backups`
+  read-only into the API for this.
+
+The Next.js dashboard is dark-first, grouped by Trading / Collection / Market / System, with a
+bottom tab bar and drawer on phones. Tables become cards below the `md` breakpoint.
+
 ## Scan locks and graceful shutdown (`services/locks.py`, `worker.py`)
 
 The worker's scheduled scans and manual "Run now" / `scan-now` share one lock per source in
@@ -238,7 +259,9 @@ screen resolves the rest.
 
 ## Price history and retention
 
-Raw `price_snapshots` are kept for 30 days, and `price_daily` aggregates are kept forever. The
+Raw `price_snapshots` are kept for 30 days, and `price_daily` aggregates are kept forever. Days are
+**UTC days** (`db.base.utc_today`), matching the UTC timestamps. The containers run in
+Europe/Oslo, and using the local date made scans between 00:00 and 02:00 aggregate the wrong day. The
 7/30/90-day and all-time medians, trend (first vs last quarter of the 30-day window) and
 volatility (stdev of daily log returns) are computed from the daily aggregates. Collector runs are
 kept for 30 days. Deal evaluations without alerts are kept for 90 days.

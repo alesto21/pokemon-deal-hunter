@@ -3,8 +3,10 @@
 premium:
   min_raw_value_nok: 400
   preferred_max_buy_nok: 1500
+  capacity_slots: 216       # GOD binder pockets (dashboard: slots used / capacity)
 regular:
   min_raw_value_nok: 50
+  capacity_slots: 360       # regular binder pockets
 # Portfolio-aware score modifiers (points added to the 0..100 score).
 modifiers:
   duplicate_in_premium: -8

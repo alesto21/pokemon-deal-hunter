@@ -116,3 +116,26 @@ def test_sealed_normalisation_paradox_rift_example():
     assert s.listing_vs_packs > 0  # more expensive than loose packs
     assert 0 <= s.rip_score <= 1 and 0 <= s.sealed_investment_score <= 1
     assert any("not an EV estimate" in n for n in s.notes)
+
+
+@pytest.mark.parametrize("tz", ["Etc/GMT-14", "Etc/GMT+12"])  # UTC+14 and UTC-12: at any hour one differs
+def test_daily_aggregation_uses_utc_day_regardless_of_local_timezone(engine, monkeypatch, tz):
+    """Regression: containers run in Europe/Oslo; aggregating date.today() missed UTC snapshots."""
+    import time as _time
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select as _select
+
+    from app.db.session import session_scope
+    from app.services import scan
+
+    monkeypatch.setenv("TZ", tz)
+    _time.tzset()
+    try:
+        assert scan.run_collector("cardtrader", send_alerts=False)["ok"]
+        with session_scope() as s:
+            days = {d.day for d in s.scalars(_select(PriceDaily)).all()}
+        assert days == {datetime.now(UTC).date()}
+    finally:
+        monkeypatch.undo()
+        _time.tzset()
